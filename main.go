@@ -33,7 +33,7 @@ func NewLocalProxyForwarder(proxyURL string) (*LocalProxyForwarder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("解析代理URL失败: %v", err)
 	}
-	
+
 	// 构建Proxy-Authorization头
 	var authHeader string
 	if targetURL.User != nil {
@@ -41,7 +41,7 @@ func NewLocalProxyForwarder(proxyURL string) (*LocalProxyForwarder, error) {
 		auth := base64.StdEncoding.EncodeToString([]byte(targetURL.User.Username() + ":" + password))
 		authHeader = "Basic " + auth
 	}
-	
+
 	return &LocalProxyForwarder{
 		targetURL:  targetURL,
 		authHeader: authHeader,
@@ -55,7 +55,7 @@ func (lpf *LocalProxyForwarder) Start() (string, error) {
 		return "", fmt.Errorf("启动本地代理监听失败: %v", err)
 	}
 	lpf.listener = listener
-	
+
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -65,34 +65,34 @@ func (lpf *LocalProxyForwarder) Start() (string, error) {
 			go lpf.handleConnection(conn)
 		}
 	}()
-	
+
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
 		return "", err
 	}
-	
+
 	return "127.0.0.1:" + port, nil
 }
 
 // handleConnection 处理连接
 func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
-	
+
 	// 读取客户端请求
 	buf := make([]byte, 4096)
 	n, err := clientConn.Read(buf)
 	if err != nil {
 		return
 	}
-	
+
 	request := string(buf[:n])
-	
+
 	// 解析请求方法和目标
 	lines := strings.Split(request, "\r\n")
 	if len(lines) == 0 {
 		return
 	}
-	
+
 	// 检查是否是CONNECT请求
 	if strings.HasPrefix(lines[0], "CONNECT") {
 		// 对于CONNECT，直接连接目标服务器
@@ -101,40 +101,40 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 			return
 		}
 		targetAddr := parts[1]
-		
+
 		// 连接到目标代理
 		proxyConn, err := net.Dial("tcp", lpf.targetURL.Host)
 		if err != nil {
 			return
 		}
 		defer proxyConn.Close()
-		
+
 		// 发送带认证的CONNECT请求到上级代理
 		connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
 		if lpf.authHeader != "" {
 			connectReq += fmt.Sprintf("Proxy-Authorization: %s\r\n", lpf.authHeader)
 		}
 		connectReq += "\r\n"
-		
+
 		proxyConn.Write([]byte(connectReq))
-		
+
 		// 读取代理响应
 		respBuf := make([]byte, 1024)
 		proxyN, err := proxyConn.Read(respBuf)
 		if err != nil {
 			return
 		}
-		
+
 		// 检查响应是否成功
 		resp := string(respBuf[:proxyN])
 		if !strings.Contains(resp, "200") {
 			fmt.Printf("代理连接失败: %s\n", resp)
 			return
 		}
-		
+
 		// 向客户端返回成功
 		clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-		
+
 		// 双向转发数据
 		go func() {
 			buf := make([]byte, 32*1024)
@@ -146,7 +146,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 				clientConn.Write(buf[:n])
 			}
 		}()
-		
+
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := clientConn.Read(buf)
@@ -162,7 +162,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 			return
 		}
 		defer proxyConn.Close()
-		
+
 		// 添加Proxy-Authorization头
 		if lpf.authHeader != "" && !strings.Contains(request, "Proxy-Authorization") {
 			// 在第一行后插入认证头
@@ -174,7 +174,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 		} else {
 			proxyConn.Write(buf[:n])
 		}
-		
+
 		// 双向转发
 		go func() {
 			buf := make([]byte, 32*1024)
@@ -186,7 +186,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 				clientConn.Write(buf[:n])
 			}
 		}()
-		
+
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := clientConn.Read(buf)
@@ -207,12 +207,12 @@ func (lpf *LocalProxyForwarder) Stop() {
 
 // Config 配置结构
 type Config struct {
-	Proxy      string `json:"proxy"`       // 代理地址，如 http://proxy-host:port
-	Headless   bool   `json:"headless"`    // 是否无头模式
-	Timeout    int    `json:"timeout"`     // 超时时间(秒)
-	Debug      bool   `json:"debug"`       // 调试模式
-	OutputDir  string `json:"output_dir"`  // 输出目录
-	Count      int    `json:"count"`       // 注册账号数量
+	Proxy     string `json:"proxy"`      // 代理地址，如 http://proxy-host:port
+	Headless  bool   `json:"headless"`   // 是否无头模式
+	Timeout   int    `json:"timeout"`    // 超时时间(秒)
+	Debug     bool   `json:"debug"`      // 调试模式
+	OutputDir string `json:"output_dir"` // 输出目录
+	Count     int    `json:"count"`      // 注册账号数量
 }
 
 // DefaultConfig 默认配置
@@ -229,17 +229,17 @@ func DefaultConfig() *Config {
 // LoadConfig 从文件加载配置
 func LoadConfig(path string) (*Config, error) {
 	config := DefaultConfig()
-	
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// 配置文件不存在，使用默认配置
 		return config, nil
 	}
-	
+
 	if err := json.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
 	}
-	
+
 	return config, nil
 }
 
@@ -310,7 +310,7 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 	client := &http.Client{
 		Timeout: 60 * time.Second,
 	}
-	
+
 	if proxyURL != "" {
 		proxyParsed, err := url.Parse(proxyURL)
 		if err == nil {
@@ -319,7 +319,7 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 			}
 		}
 	}
-	
+
 	return &HTTPClient{client: client}
 }
 
@@ -475,11 +475,11 @@ func (c *HTTPClient) getMailTmEmail() string {
 }
 
 // MailService 邮箱服务信息
- type MailService struct {
-	Name    string
-	Email   string
-	Token   string // 用于Mail.tm等需要认证的服务
-	Domain  string
+type MailService struct {
+	Name   string
+	Email  string
+	Token  string // 用于Mail.tm等需要认证的服务
+	Domain string
 }
 
 // currentMailService 当前使用的邮箱服务
@@ -787,6 +787,7 @@ func randomString(length int) string {
 	}
 	return string(result)
 }
+
 // BrowserRegister 浏览器自动化注册
 type BrowserRegister struct {
 	browser    *rod.Browser
@@ -835,7 +836,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		return nil, fmt.Errorf("未找到系统浏览器")
 	}
 	fmt.Printf("使用浏览器: %s\n", path)
-	
+
 	if br.config.Proxy != "" {
 		fmt.Printf("使用代理: %s\n", br.config.Proxy)
 	}
@@ -853,7 +854,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		Set("disable-features", "IsolateOrigins,site-per-process").
 		Set("window-size", "1920,1080").
 		Set("user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-	
+
 	// 设置代理
 	var localProxy *LocalProxyForwarder
 	if br.config.Proxy != "" {
@@ -891,7 +892,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	// 使用直接的注册URL - auth.openai.com
 	signupURL := "https://auth.openai.com/authorize?client_id=TdJIcbe16WoTHtN95nyywh5E4yOo6ItG&audience=https%3A%2F%2Fapi.openai.com%2Fv1&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fapi%2Fauth%2Fcallback%2Flogin-web&scope=openid+email+profile+offline_access+model.request+model.read+organization.read+organization.write&response_type=code&response_mode=query&state=state_is_immaterial&code_challenge=challenge_is_immaterial&code_challenge_method=S256&screen_hint=signup"
-	
+
 	page := br.browser.MustPage(signupURL)
 
 	// 完整的隐蔽模式脚本 - 绕过各种检测
@@ -965,7 +966,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	// 步骤0: 点击 "Sign up for free" 按钮
 	fmt.Println("\n步骤0: 点击 Sign up for free...")
-	
+
 	// 尝试通过文本点击
 	signupClicked := false
 	for i := 0; i < 5; i++ {
@@ -992,13 +993,13 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		}
 		time.Sleep(1 * time.Second)
 	}
-	
+
 	if !signupClicked {
 		fmt.Println("⚠️ 未找到 Sign up 按钮")
 		br.saveDebugScreenshot(page, "02_signup_not_found")
 		return nil, fmt.Errorf("未找到 Sign up 按钮")
 	}
-	
+
 	// 等待页面跳转和React SPA加载 - 需要等待较长时间
 	fmt.Println("等待注册页面加载 (React SPA)...")
 	for i := 0; i < 20; i++ {
@@ -1011,14 +1012,14 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 			break
 		}
 	}
-	
+
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "02_after_signup_click")
 
 	// 步骤1: 输入邮箱
 	fmt.Println("\n步骤1: 输入邮箱...")
 	time.Sleep(1 * time.Second)
-	
+
 	emailSelectors := []string{
 		"input[name='email']",
 		"input[type='email']",
@@ -1029,7 +1030,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		"input[id='email-input']",
 		"input[data-testid='email-input']",
 	}
-	
+
 	if !br.inputTextWithWait(page, emailSelectors, email, "Email", 15*time.Second) {
 		fmt.Println("⚠️ 未找到邮箱输入框")
 		br.saveDebugScreenshot(page, "03_email_not_found")
@@ -1042,14 +1043,14 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	// 步骤2: 点击Continue按钮
 	fmt.Println("\n步骤2: 点击Continue...")
 	time.Sleep(1 * time.Second)
-	
+
 	continueClicked := br.clickButtonWithWait(page, []string{
 		"button[type='submit']",
 		"button[data-testid='continue-button']",
 		"button[name='continue']",
 		"input[type='submit']",
 	}, 10*time.Second)
-	
+
 	if !continueClicked {
 		// 尝试通过文本查找
 		if !br.clickElementByText(page, "button", "Continue") {
@@ -1058,7 +1059,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 			br.debugPageElements(page, "button")
 		}
 	}
-	
+
 	// 等待页面跳转/加载
 	fmt.Println("等待页面响应...")
 	time.Sleep(3 * time.Second)
@@ -1068,7 +1069,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	// 步骤3: 输入密码（可能在同一页面或新页面）
 	fmt.Println("\n步骤3: 输入密码...")
 	time.Sleep(2 * time.Second)
-	
+
 	passwordSelectors := []string{
 		"input[name='password']",
 		"input[type='password']",
@@ -1078,9 +1079,9 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		"input[placeholder*='password' i]",
 		"input[data-testid='password-input']",
 	}
-	
+
 	passwordFound := br.inputTextWithWait(page, passwordSelectors, password, "Password", 15*time.Second)
-	
+
 	if !passwordFound {
 		fmt.Println("⚠️ 未找到密码输入框，可能已使用OAuth或其他方式")
 		br.saveDebugScreenshot(page, "07_password_not_found")
@@ -1088,11 +1089,11 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		// 不返回错误，继续尝试
 	} else {
 		br.saveDebugScreenshot(page, "08_password_entered")
-		
+
 		// 步骤3: 点击Continue完成注册
 		fmt.Println("\n步骤3: 提交注册...")
 		time.Sleep(1 * time.Second)
-		
+
 		// 尝试多个可能的按钮文本
 		for _, btnText := range []string{"Continue", "Sign up", "Create account", "Create"} {
 			if br.clickElementByText(page, "button", btnText) {
@@ -1101,7 +1102,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		}
 		br.clickButtonWithWait(page, []string{"button[type='submit']"}, 5*time.Second)
 	}
-	
+
 	// 等待注册完成
 	fmt.Println("\n等待注册处理...")
 	time.Sleep(5 * time.Second)
@@ -1127,7 +1128,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 			// 处理OTP验证码
 			otpCode := strings.TrimPrefix(verifyLink, "OTP:")
 			fmt.Printf("检测到OTP验证码: %s\n", otpCode)
-			
+
 			// 输入OTP码
 			br.handleOTPInput(page, otpCode)
 		} else {
@@ -1350,7 +1351,7 @@ func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
 func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
 	step := 0 // 0: 初始, 1: 已提交
 	name := ""
-	
+
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
 
@@ -1365,13 +1366,13 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
 
 		// 处理 about-you 页面
 		if strings.Contains(currentURL, "about-you") {
-			
+
 			if step == 0 {
 				// 输入姓名
 				nameInput, _ := page.Timeout(2 * time.Second).Element("input[name='name']")
 				if nameInput != nil {
 					val, _ := nameInput.Eval(`() => this.value`)
-if len(val.Value.String()) == 0 {
+					if len(val.Value.String()) == 0 {
 						// 使用真实的英文名，不含数字
 						names := []string{"James", "John", "Robert", "Michael", "David", "William", "Richard", "Joseph", "Thomas", "Charles", "Daniel", "Matthew", "Anthony", "Mark", "Steven", "Paul", "Andrew", "Joshua", "Kenneth", "Kevin", "Brian", "George", "Edward", "Ronald", "Timothy", "Jason", "Jeffrey", "Ryan", "Jacob", "Gary", "Nicholas", "Eric", "Jonathan", "Stephen", "Larry", "Justin", "Scott", "Brandon", "Raymond", "Samuel", "Benjamin", "Gregory", "Frank", "Alexander", "Patrick", "Jack", "Dennis", "Jerry", "Tyler", "Aaron", "Jose", "Adam", "Henry", "Nathan", "Douglas", "Zachary", "Peter", "Kyle"}
 						firstName := names[rand.Intn(len(names))]
@@ -1385,12 +1386,12 @@ if len(val.Value.String()) == 0 {
 						name = val.Value.String()
 					}
 				}
-				
+
 				// 使用 React 原生方法设置隐藏的 birthday 字段
 				year := 1990 + rand.Intn(15)
 				birthdate := fmt.Sprintf("%d-01-15", year)
 				fmt.Printf("设置生日: %s\n", birthdate)
-				
+
 				// 使用 React 兼容的方式设置隐藏字段
 				result := page.MustEval(fmt.Sprintf(`() => {
 					const input = document.querySelector('input[name="birthday"]');
@@ -1404,10 +1405,10 @@ if len(val.Value.String()) == 0 {
 					return {success: false, error: 'birthday input not found'};
 				}`, birthdate))
 				fmt.Printf("设置生日结果: %v\n", result)
-				
+
 				time.Sleep(500 * time.Millisecond)
-				
-// 尝试通过 API 提交
+
+				// 尝试通过 API 提交
 				fmt.Println("尝试通过 API 提交...")
 				apiResult := page.MustEval(fmt.Sprintf(`() => {
 					return fetch('https://auth.openai.com/api/accounts/create_account', {
@@ -1425,7 +1426,7 @@ if len(val.Value.String()) == 0 {
 					.catch(e => ({error: e.toString()}));
 				}`, name, birthdate))
 				fmt.Printf("API 结果: %v\n", apiResult)
-				
+
 				// 解析 API 响应，提取 continue_url
 				if apiResult.Get("ok").Bool() {
 					bodyStr := apiResult.Get("body").String()
@@ -1442,9 +1443,9 @@ if len(val.Value.String()) == 0 {
 						continue
 					}
 				}
-				
+
 				time.Sleep(2 * time.Second)
-				
+
 				// 也尝试点击 Submit 按钮
 				submitBtn, _ := page.Timeout(1 * time.Second).Element("button[type='submit']")
 				if submitBtn != nil {
@@ -1455,13 +1456,13 @@ if len(val.Value.String()) == 0 {
 						time.Sleep(2 * time.Second)
 					}
 				}
-				
+
 				step = 1
 			} else if step == 1 {
 				// 已提交，等待跳转
 				fmt.Println("等待页面跳转...")
 			}
-			
+
 			br.saveDebugScreenshot(page, fmt.Sprintf("11_about_you_step%d", step))
 			continue
 		}
@@ -1512,7 +1513,7 @@ func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
 		// 解析JSON
 		var session struct {
 			AccessToken string `json:"accessToken"`
-			User       struct {
+			User        struct {
 				ID string `json:"id"`
 			} `json:"user"`
 		}
@@ -1563,6 +1564,7 @@ func (br *BrowserRegister) clickElementByText(page *rod.Page, tag, text string) 
 	}
 	return false
 }
+
 // findElementByText 通过文本查找元素
 func (br *BrowserRegister) findElementByText(page *rod.Page, tag, text string) *rod.Element {
 	elements, err := page.Elements(tag)
@@ -1581,7 +1583,6 @@ func (br *BrowserRegister) findElementByText(page *rod.Page, tag, text string) *
 	}
 	return nil
 }
-
 
 // clickElement 点击元素
 func (br *BrowserRegister) clickElement(page *rod.Page, selectors []string, desc string) bool {
@@ -1648,7 +1649,7 @@ func (br *BrowserRegister) waitForReactComponents(page *rod.Page) {
 // inputTextWithWait 带等待的文本输入
 func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string, text, desc string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	
+
 	for time.Now().Before(deadline) {
 		for _, sel := range selectors {
 			el, err := page.Timeout(2 * time.Second).Element(sel)
@@ -1674,7 +1675,7 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 			// 清空并输入
 			el.Eval(`() => this.value = ''`)
 			time.Sleep(100 * time.Millisecond)
-			
+
 			if err := el.Input(text); err != nil {
 				continue
 			}
@@ -1684,7 +1685,7 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	
+
 	fmt.Printf("  %s: 超时未找到\n", desc)
 	return false
 }
@@ -1692,7 +1693,7 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 // clickButtonWithWait 带等待的按钮点击
 func (br *BrowserRegister) clickButtonWithWait(page *rod.Page, selectors []string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	
+
 	for time.Now().Before(deadline) {
 		for _, sel := range selectors {
 			el, err := page.Timeout(2 * time.Second).Element(sel)
@@ -1716,7 +1717,7 @@ func (br *BrowserRegister) clickButtonWithWait(page *rod.Page, selectors []strin
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	
+
 	return false
 }
 
@@ -1726,7 +1727,7 @@ func (br *BrowserRegister) saveDebugScreenshot(page *rod.Page, name string) {
 	if err != nil {
 		return
 	}
-	
+
 	filename := fmt.Sprintf("./debug_%s.png", name)
 	if err := os.WriteFile(filename, screenshot, 0644); err == nil {
 		fmt.Printf("  [调试] 截图已保存: %s\n", filename)
@@ -1736,28 +1737,28 @@ func (br *BrowserRegister) saveDebugScreenshot(page *rod.Page, name string) {
 // debugPageElements 打印页面元素用于调试
 func (br *BrowserRegister) debugPageElements(page *rod.Page, tag string) {
 	fmt.Printf("\n[调试] 页面 %s 元素:\n", tag)
-	
+
 	elements, err := page.Elements(tag)
 	if err != nil {
 		fmt.Printf("  获取元素失败: %v\n", err)
 		return
 	}
-	
+
 	fmt.Printf("  找到 %d 个 %s 元素\n", len(elements), tag)
-	
+
 	for i, el := range elements {
 		if i >= 10 {
 			fmt.Println("  ... (更多元素已省略)")
 			break
 		}
-		
+
 		// 直接获取属性
 		name, _ := el.Eval(`() => this.name || this.id || ''`)
 		typ, _ := el.Eval(`() => this.type || ''`)
 		placeholder, _ := el.Eval(`() => this.placeholder || ''`)
-		
-		fmt.Printf("  [%d] name=%s type=%s placeholder=%s\n", 
-			i, 
+
+		fmt.Printf("  [%d] name=%s type=%s placeholder=%s\n",
+			i,
 			name.Value.String(),
 			typ.Value.String(),
 			placeholder.Value.String())
@@ -1876,10 +1877,10 @@ func main() {
 		fmt.Printf("加载配置失败: %v，使用默认配置\n", err)
 		config = DefaultConfig()
 	}
-	
+
 	// 检查命令行参数
 	simMode := false
-	count := config.Count  // 默认使用配置文件中的数量
+	count := config.Count // 默认使用配置文件中的数量
 	for _, arg := range os.Args[1:] {
 		if arg == "--sim" || arg == "-sim" {
 			simMode = true
@@ -1888,21 +1889,24 @@ func main() {
 		} else if arg == "--debug" || arg == "-debug" {
 			config.Debug = true
 		} else {
-			fmt.Sscanf(arg, "%d", &count)  // 命令行覆盖配置
+			fmt.Sscanf(arg, "%d", &count) // 命令行覆盖配置
 		}
 	}
+
 	// 显示配置信息
-if config.Proxy != "" {
+	if config.Proxy != "" {
 		fmt.Printf("代理: %s\n", config.Proxy)
 	}
 	fmt.Printf("无头模式: %v\n", config.Headless)
 	fmt.Printf("输出目录: %s\n", config.OutputDir)
 	fmt.Printf("注册数量: %d\n\n", count)
+
 	if simMode {
 		fmt.Println("[模拟模式] 生成测试凭证...")
+		successCount := 0
 		for i := 0; i < count; i++ {
 			fmt.Printf("\n========== 生成第 %d/%d 个凭证 ==========\n", i+1, count)
-			
+
 			// 生成模拟凭证
 			ts := time.Now().Unix()
 			randStr := randomString(16)
@@ -1928,12 +1932,15 @@ if config.Proxy != "" {
 			} else {
 				fmt.Printf("Access Token: %s\n", credentials.AccessToken)
 			}
+			successCount++
 		}
+		fmt.Printf("\n模拟模式成功生成账号数: %d/%d\n", successCount, count)
 	} else {
 		fmt.Printf("将注册 %d 个账号\n\n", count)
 
 		httpClient := NewHTTPClientWithProxy(config.Proxy)
 		br := NewBrowserRegister(config)
+		successCount := 0
 		for i := 0; i < count; i++ {
 			fmt.Printf("\n========== 注册第 %d/%d 个账号 ==========\n", i+1, count)
 
@@ -1956,31 +1963,33 @@ if config.Proxy != "" {
 				continue
 			}
 
-		// 保存凭证
-		if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
-			fmt.Printf("保存凭证失败: %v\n", err)
-		}
+			// 保存凭证
+			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
+				fmt.Printf("保存凭证失败: %v\n", err)
+			}
 
-		fmt.Println("\n=== 注册成功 ===")
-		fmt.Printf("邮箱: %s\n", credentials.Email)
-		// 安全打印 token 前缀
-		if len(credentials.AccessToken) > 50 {
-			fmt.Printf("Access Token: %s...\n", credentials.AccessToken[:50])
-		} else {
-			fmt.Printf("Access Token: %s\n", credentials.AccessToken)
-		}
-		fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
+			fmt.Println("\n=== 注册成功 ===")
+			fmt.Printf("邮箱: %s\n", credentials.Email)
+			// 安全打印 token 前缀
+			if len(credentials.AccessToken) > 50 {
+				fmt.Printf("Access Token: %s...\n", credentials.AccessToken[:50])
+			} else {
+				fmt.Printf("Access Token: %s\n", credentials.AccessToken)
+			}
+			fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
+			successCount++
 
-		// 等待一段时间再注册下一个
-		if i < count-1 {
-			waitTime := 30 + rand.Intn(30)
-			fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
-			time.Sleep(time.Duration(waitTime) * time.Second)
+			// 等待一段时间再注册下一个
+			if i < count-1 {
+				waitTime := 30 + rand.Intn(30)
+				fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+				time.Sleep(time.Duration(waitTime) * time.Second)
+			}
 		}
+		fmt.Printf("\n成功注册账号数: %d/%d\n", successCount, count)
 	}
-}
 
-fmt.Println("\n====================================")
-fmt.Println("   所有账号处理完成")
-fmt.Println("====================================")
+	fmt.Println("\n====================================")
+	fmt.Println("   所有账号处理完成")
+	fmt.Println("====================================")
 }

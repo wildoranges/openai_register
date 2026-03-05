@@ -30,3 +30,9 @@ register.log
 
 # Compiled binary (build from source)
 convert_to_cliproxy
+
+# Local cloned dependency
+CLIProxyAPI/
+
+# Config (contains sensitive proxy credentials)
+config.json
