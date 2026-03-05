@@ -57,7 +57,7 @@ openai_register/             # 本项目根目录
 ### 1. 克隆项目
 
 ```bash
-git clone gitlab@222.195.92.204:wildoranges/openai_register.git
+git clone <project_url>
 cd openai_register
 ```
 
