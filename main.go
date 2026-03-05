@@ -1779,7 +1779,19 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		json.Unmarshal(data, &existing)
 	}
 
-	existing = append(existing, *credentials)
+	// 检查邮箱是否已存在，如果存在则更新
+	found := false
+	for i, cred := range existing {
+		if cred.Email == credentials.Email {
+			existing[i] = *credentials
+			found = true
+			fmt.Printf("更新已存在的凭证: %s\n", credentials.Email)
+			break
+		}
+	}
+	if !found {
+		existing = append(existing, *credentials)
+	}
 
 	data, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
@@ -1803,17 +1815,42 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 	fmt.Printf("CodeX凭证已保存到: %s\n", codexFile)
 
 	// 保存为简单文本格式（供其他工具使用）
+	// 先读取现有内容，检查是否已有该邮箱
 	tokenFile := filepath.Join(dataDir, "openai_tokens.txt")
-	f, err := os.OpenFile(tokenFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	existingTokens := ""
+	if tokenData, err := os.ReadFile(tokenFile); err == nil {
+		existingTokens = string(tokenData)
+	}
+
+	// 如果该邮箱已存在，先删除旧记录
+	if strings.Contains(existingTokens, fmt.Sprintf("OPENAI_EMAIL=%s\n", credentials.Email)) {
+		// 移除该邮箱的旧记录块
+		lines := strings.Split(existingTokens, "\n")
+		var newLines []string
+		i := 0
+		for i < len(lines) {
+			if strings.HasPrefix(lines[i], "# Account: ") && i+4 < len(lines) {
+				// 检查是否是目标邮箱
+				if i+2 < len(lines) && strings.Contains(lines[i+2], fmt.Sprintf("OPENAI_EMAIL=%s", credentials.Email)) {
+					// 跳过这个账号块（5行：# Account, ACCESS_TOKEN, EMAIL, PASSWORD, 空行）
+					i += 5
+					continue
+				}
+			}
+			newLines = append(newLines, lines[i])
+			i++
+		}
+		existingTokens = strings.Join(newLines, "\n")
+	}
+
+	// 追加新记录
+	newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
+		credentials.Email, credentials.AccessToken, credentials.Email, credentials.Password)
+	existingTokens += newRecord
+
+	if err := os.WriteFile(tokenFile, []byte(existingTokens), 0644); err != nil {
 		return err
 	}
-	defer f.Close()
-
-	f.WriteString(fmt.Sprintf("# Account: %s\n", credentials.Email))
-	f.WriteString(fmt.Sprintf("OPENAI_ACCESS_TOKEN=%s\n", credentials.AccessToken))
-	f.WriteString(fmt.Sprintf("OPENAI_EMAIL=%s\n", credentials.Email))
-	f.WriteString(fmt.Sprintf("OPENAI_PASSWORD=%s\n\n", credentials.Password))
 
 	return nil
 }
