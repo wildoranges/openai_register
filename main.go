@@ -1016,6 +1016,12 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "02_after_signup_click")
 
+	if blocked, reason := br.detectUnsupportedRegionError(page); blocked {
+		fmt.Println("❌ 检测到地区限制页面")
+		br.saveDebugScreenshot(page, "03_region_not_supported")
+		return nil, fmt.Errorf("当前IP/地区不支持OpenAI注册: %s", reason)
+	}
+
 	// 步骤1: 输入邮箱
 	fmt.Println("\n步骤1: 输入邮箱...")
 	time.Sleep(1 * time.Second)
@@ -1032,6 +1038,11 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	}
 
 	if !br.inputTextWithWait(page, emailSelectors, email, "Email", 15*time.Second) {
+		if blocked, reason := br.detectUnsupportedRegionError(page); blocked {
+			fmt.Println("❌ 邮箱输入前检测到地区限制")
+			br.saveDebugScreenshot(page, "03_region_not_supported")
+			return nil, fmt.Errorf("当前IP/地区不支持OpenAI注册: %s", reason)
+		}
 		fmt.Println("⚠️ 未找到邮箱输入框")
 		br.saveDebugScreenshot(page, "03_email_not_found")
 		// 尝试打印页面结构
@@ -1168,6 +1179,51 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	br.saveDebugScreenshot(page, "11_success")
 	return credentials, nil
+}
+
+func (br *BrowserRegister) detectUnsupportedRegionError(page *rod.Page) (bool, string) {
+	titleObj, err := page.Eval(`() => document.title || ""`)
+	if err != nil {
+		return false, ""
+	}
+	bodyObj, err := page.Eval(`() => document.body ? (document.body.innerText || "") : ""`)
+	if err != nil {
+		return false, ""
+	}
+	urlObj, err := page.Eval(`() => window.location.href || ""`)
+	if err != nil {
+		return false, ""
+	}
+
+	title := strings.ToLower(titleObj.Value.String())
+	bodyText := strings.ToLower(bodyObj.Value.String())
+	currentURL := strings.ToLower(urlObj.Value.String())
+	combined := title + "\n" + bodyText + "\n" + currentURL
+
+	indicators := []string{
+		"country, region, or territory not supported",
+		"country, region, or teritory not suported",
+		"unsuperted country region territory",
+		"unsupported country region territory",
+		"request forbidden",
+		"request forbiden",
+		"not supported in your country",
+	}
+
+	for _, indicator := range indicators {
+		if strings.Contains(combined, indicator) {
+			reason := strings.TrimSpace(bodyObj.Value.String())
+			if reason == "" {
+				reason = "Country/Region/Territory not supported"
+			}
+			if len(reason) > 240 {
+				reason = reason[:240] + "..."
+			}
+			return true, reason
+		}
+	}
+
+	return false, ""
 }
 
 // handleCloudflare 处理Cloudflare挑战
