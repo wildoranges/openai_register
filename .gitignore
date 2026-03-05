@@ -1,0 +1,33 @@
+# Binary
+openai-register
+
+# Debug images
+debug_*.png
+
+# Credentials (sensitive)
+creds/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+register.log
+
+# Compiled binary (build from source)
+convert_to_cliproxy
