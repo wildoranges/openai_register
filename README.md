@@ -36,8 +36,10 @@ openai_register/             # 本项目根目录
 ├── main.go                 # 主程序源码
 ├── openai-register         # 编译后的二进制
 ├── config.json             # 配置文件
-├── convert_to_cliproxy     # 凭证转换工具
-├── convert_to_cliproxy.go  # 转换工具源码
+├── cmd/
+│   └── convert/
+│       └── main.go         # 转换工具源码
+├── convert_to_cliproxy     # 转换工具二进制
 ├── README.md               # 本文档
 └── creds/                  # 凭证输出目录
     ├── openai_credentials.json   # 完整凭证 JSON
@@ -68,7 +70,7 @@ cd openai_register
 go build -o openai-register .
 
 # 构建转换工具
-go build -o convert_to_cliproxy convert_to_cliproxy.go
+go build -o convert_to_cliproxy ./cmd/convert
 ```
 
 ### 3. 注册账号
@@ -260,7 +262,7 @@ OpenAI 注册机输出的凭证格式与 CLIProxyAPI 要求的格式不同：
 **构建：**
 
 ```bash
-go build -o convert_to_cliproxy convert_to_cliproxy.go
+go build -o convert_to_cliproxy ./cmd/convert
 ```
 
 ### 2.3 凭证文件格式
@@ -605,7 +607,7 @@ cd openai_register
 # 2. 构建工具
 echo "[2/5] 构建工具..."
 go build -o openai-register .
-go build -o convert_to_cliproxy convert_to_cliproxy.go
+go build -o convert_to_cliproxy ./cmd/convert
 
 # 3. 注册账号
 echo "[3/5] 注册 OpenAI 账号..."
