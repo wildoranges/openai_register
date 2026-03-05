@@ -284,12 +284,14 @@ var tempMailProviders = []TempMailProvider{
 
 // AccountCredentials 账号凭证
 type AccountCredentials struct {
-	Email       string    `json:"email"`
-	Password    string    `json:"password"`
-	AccessToken string    `json:"access_token"`
-	SessionID   string    `json:"session_id"`
-	UserID      string    `json:"user_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	Email        string    `json:"email"`
+	Password     string    `json:"password"`
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	IDToken      string    `json:"id_token"`
+	SessionID    string    `json:"session_id"`
+	UserID       string    `json:"user_id"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // HTTPClient HTTP客户端
@@ -1157,12 +1159,22 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		return nil, fmt.Errorf("获取Access Token失败")
 	}
 
-	credentials := &AccountCredentials{
+credentials := &AccountCredentials{
 		Email:       email,
 		Password:    password,
 		AccessToken: accessToken,
 		UserID:      userID,
 		CreatedAt:   time.Now(),
+	}
+
+	// 步骤6: 尝试通过设备码流程获取 refresh_token
+	refreshToken, idToken, err := br.getRefreshTokenViaDeviceFlow(email, password)
+	if err != nil {
+		fmt.Printf("获取 refresh_token 失败（不影响使用）: %v\n", err)
+	} else if refreshToken != "" {
+		credentials.RefreshToken = refreshToken
+		credentials.IDToken = idToken
+		fmt.Println("成功获取 refresh_token!")
 	}
 
 	br.saveDebugScreenshot(page, "11_success")
@@ -1802,12 +1814,18 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		return err
 	}
 
-	// 同时保存为CodeX格式
+// 同时保存为CodeX格式
 	codexAuth := map[string]interface{}{
-		"access_token": credentials.AccessToken,
-		"email":        credentials.Email,
-		"user_id":      credentials.UserID,
-		"created_at":   credentials.CreatedAt,
+		"access_token":  credentials.AccessToken,
+		"refresh_token": credentials.RefreshToken,
+		"id_token":      credentials.IDToken,
+		"email":         credentials.Email,
+		"user_id":       credentials.UserID,
+		"created_at":    credentials.CreatedAt,
+		"type":          "codex",
+	}
+	if credentials.RefreshToken != "" {
+		codexAuth["last_refresh"] = time.Now().Format(time.RFC3339)
 	}
 	codexData, _ := json.MarshalIndent(codexAuth, "", "  ")
 	codexFile := filepath.Join(dataDir, fmt.Sprintf("auth_%s.json", credentials.Email[:strings.Index(credentials.Email, "@")]))
@@ -1843,9 +1861,9 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		existingTokens = strings.Join(newLines, "\n")
 	}
 
-	// 追加新记录
-	newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
-		credentials.Email, credentials.AccessToken, credentials.Email, credentials.Password)
+// 追加新记录
+	newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_REFRESH_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
+		credentials.Email, credentials.AccessToken, credentials.RefreshToken, credentials.Email, credentials.Password)
 	existingTokens += newRecord
 
 	if err := os.WriteFile(tokenFile, []byte(existingTokens), 0644); err != nil {
@@ -1983,4 +2001,286 @@ if config.Proxy != "" {
 fmt.Println("\n====================================")
 fmt.Println("   所有账号处理完成")
 fmt.Println("====================================")
+}
+
+// ========================================
+// 设备码流程 - 获取 refresh_token
+// ========================================
+
+const (
+	codexClientID                = "app_EMoamEEZ73f0CkXaXp7hrann"
+	codexDeviceUserCodeURL       = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+	codexDeviceTokenURL          = "https://auth.openai.com/api/accounts/deviceauth/token"
+	codexDeviceVerificationURL   = "https://auth.openai.com/codex/device"
+	codexDeviceCallbackURI       = "https://auth.openai.com/deviceauth/callback"
+	codexOAuthTokenURL           = "https://auth.openai.com/oauth/token"
+	codexDeviceTimeout           = 10 * time.Minute
+	codexDevicePollInterval      = 5 * time.Second
+)
+
+type deviceUserCodeRequest struct {
+	ClientID string `json:"client_id"`
+}
+
+type deviceUserCodeResponse struct {
+	DeviceAuthID string `json:"device_auth_id"`
+	UserCode     string `json:"user_code"`
+}
+
+type deviceTokenResponse struct {
+	AuthorizationCode string `json:"authorization_code"`
+	CodeVerifier      string `json:"code_verifier"`
+	CodeChallenge     string `json:"code_challenge"`
+}
+
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// requestDeviceUserCode 请求设备码
+func requestDeviceUserCode(httpClient *http.Client) (*deviceUserCodeResponse, error) {
+	body, err := json.Marshal(deviceUserCodeRequest{ClientID: codexClientID})
+	if err != nil {
+		return nil, fmt.Errorf("编码设备码请求失败: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", codexDeviceUserCodeURL, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("创建设备码请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求设备码失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取设备码响应失败: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("设备码请求失败: %s", string(respBody))
+	}
+
+	var result deviceUserCodeResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("解析设备码响应失败: %w", err)
+	}
+
+	return &result, nil
+}
+
+// pollDeviceToken 轮询获取授权码
+func pollDeviceToken(httpClient *http.Client, deviceAuthID, userCode string) (*deviceTokenResponse, error) {
+	deadline := time.Now().Add(codexDeviceTimeout)
+
+	for {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("设备码认证超时")
+		}
+
+		body := fmt.Sprintf(`{"device_auth_id":"%s","user_code":"%s"}`, deviceAuthID, userCode)
+		req, err := http.NewRequest("POST", codexDeviceTokenURL, strings.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			time.Sleep(codexDevicePollInterval)
+			continue
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == 200 {
+			var result deviceTokenResponse
+			if err := json.Unmarshal(respBody, &result); err != nil {
+				return nil, fmt.Errorf("解析授权码响应失败: %w", err)
+			}
+			return &result, nil
+		}
+
+		// 继续轮询
+		time.Sleep(codexDevicePollInterval)
+	}
+}
+
+// exchangeCodeForTokens 用授权码换取 tokens
+func exchangeCodeForTokens(httpClient *http.Client, authCode, codeVerifier string) (*oauthTokenResponse, error) {
+	data := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {codexClientID},
+		"code":          {authCode},
+		"redirect_uri":  {codexDeviceCallbackURI},
+		"code_verifier": {codeVerifier},
+	}
+
+	req, err := http.NewRequest("POST", codexOAuthTokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("创建 token 请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("token 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取 token 响应失败: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("token 交换失败: %s", string(respBody))
+	}
+
+	var result oauthTokenResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("解析 token 响应失败: %w", err)
+	}
+
+	return &result, nil
+}
+
+// getRefreshTokenViaDeviceFlow 通过设备码流程获取 refresh_token
+func (br *BrowserRegister) getRefreshTokenViaDeviceFlow(email, password string) (string, string, error) {
+	fmt.Println("\n步骤6: 通过设备码流程获取 Refresh Token...")
+
+	// 1. 请求设备码
+	fmt.Println("请求设备码...")
+	deviceResp, err := requestDeviceUserCode(br.httpClient.client)
+	if err != nil {
+		return "", "", fmt.Errorf("请求设备码失败: %w", err)
+	}
+
+	fmt.Printf("设备码: %s\n", deviceResp.UserCode)
+	fmt.Printf("请访问: %s 并输入设备码\n", codexDeviceVerificationURL)
+
+	// 2. 打开浏览器进行设备码验证
+	page, err := br.browser.Page(proto.TargetCreateTarget{URL: codexDeviceVerificationURL})
+	if err != nil {
+		return "", "", fmt.Errorf("打开验证页面失败: %w", err)
+	}
+	defer page.Close()
+
+	time.Sleep(3 * time.Second)
+
+	// 等待页面加载
+	time.Sleep(2 * time.Second)
+
+	// 3. 输入设备码
+	codeInput, err := page.Timeout(10 * time.Second).Element("input[name='user_code'], input[type='text']")
+	if err != nil {
+		// 尝试其他选择器
+		codeInput, err = page.Timeout(5 * time.Second).Element("input")
+		if err != nil {
+			fmt.Println("无法找到设备码输入框，跳过 refresh_token 获取")
+			return "", "", nil
+		}
+	}
+
+	// 分段输入设备码
+	for i, ch := range deviceResp.UserCode {
+		if i > 0 && (ch == '-' || i == 4) {
+			// 等待输入框切换
+			time.Sleep(200 * time.Millisecond)
+		}
+		activeInput, _ := page.Element("input:focus")
+		if activeInput != nil {
+			activeInput.MustInput(string(ch))
+		} else {
+			codeInput.MustInput(string(ch))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	fmt.Println("已输入设备码")
+	time.Sleep(2 * time.Second)
+
+	// 4. 点击确认按钮
+	confirmBtn, err := page.Timeout(5 * time.Second).Element("button[type='submit']")
+	if err == nil {
+		confirmBtn.MustClick()
+		fmt.Println("已点击确认按钮")
+		time.Sleep(3 * time.Second)
+	}
+
+	// 5. 处理登录/授权页面（可能需要重新登录）
+	currentURL := page.MustInfo().URL
+	fmt.Printf("当前URL: %s\n", currentURL)
+
+	// 如果需要登录，使用已注册的账号登录
+	if strings.Contains(currentURL, "log-in") || strings.Contains(currentURL, "login") {
+		fmt.Println("需要登录...")
+		
+		// 等待邮箱输入框
+		emailInput, err := page.Timeout(10 * time.Second).Element("input[name='email']")
+		if err == nil {
+			emailInput.MustInput(email)
+			time.Sleep(500 * time.Millisecond)
+
+			// 点击继续
+			continueBtn, _ := page.Element("button[type='submit']")
+			if continueBtn != nil {
+				continueBtn.MustClick()
+				time.Sleep(3 * time.Second)
+			}
+
+			// 等待密码输入框
+			passInput, err := page.Timeout(10 * time.Second).Element("input[type='password']")
+			if err == nil {
+				passInput.MustInput(password)  // 使用注册时的密码
+				time.Sleep(500 * time.Millisecond)
+
+				submitBtn, _ := page.Element("button[type='submit']")
+				if submitBtn != nil {
+					submitBtn.MustClick()
+					time.Sleep(3 * time.Second)
+				}
+			}
+		}
+	}
+
+	// 6. 点击授权按钮（如果出现）
+	authorizeBtn, err := page.Timeout(5 * time.Second).Element("button:contains('Allow'), button:contains('Authorize'), button[type='submit']")
+	if err == nil {
+		authorizeBtn.MustClick()
+		fmt.Println("已授权")
+		time.Sleep(2 * time.Second)
+	}
+
+	// 7. 轮询获取授权码
+	fmt.Println("轮询获取授权码...")
+	tokenResp, err := pollDeviceToken(br.httpClient.client, deviceResp.DeviceAuthID, deviceResp.UserCode)
+	if err != nil {
+		fmt.Printf("轮询授权码失败: %v\n", err)
+		return "", "", nil  // 不返回错误，继续使用 session token
+	}
+
+	fmt.Println("获取到授权码，交换 tokens...")
+
+	// 8. 用授权码换取 tokens
+	oauthResp, err := exchangeCodeForTokens(br.httpClient.client, tokenResp.AuthorizationCode, tokenResp.CodeVerifier)
+	if err != nil {
+		fmt.Printf("交换 tokens 失败: %v\n", err)
+		return "", "", nil
+	}
+
+	fmt.Println("成功获取 refresh_token!")
+	return oauthResp.RefreshToken, oauthResp.IDToken, nil
 }

@@ -12,12 +12,14 @@ import (
 
 // Credential 注册机输出的凭证格式
 type Credential struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	AccessToken string `json:"access_token"`
-	SessionID   string `json:"session_id"`
-	UserID      string `json:"user_id"`
-	CreatedAt   string `json:"created_at"`
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	SessionID    string `json:"session_id"`
+	UserID       string `json:"user_id"`
+	CreatedAt    string `json:"created_at"`
 }
 
 // CLIProxyCredential CLIProxyAPI 要求的凭证格式
@@ -118,11 +120,11 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 			fmt.Printf("[%d] 警告 %s: JWT 解码失败: %v\n", i+1, email, err)
 		}
 
-		// 构建 CLIProxyAPI 格式
+// 构建 CLIProxyAPI 格式
 		cliproxyCred := CLIProxyCredential{
-			IDToken:      "",
+			IDToken:      cred.IDToken,
 			AccessToken:  cred.AccessToken,
-			RefreshToken: "",
+			RefreshToken: cred.RefreshToken,
 			AccountID:    "",
 			LastRefresh:  time.Now().Format(time.RFC3339),
 			Email:        email,
@@ -131,12 +133,18 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 		}
 
 		var ttlInfo string
+		var refreshInfo string
+		if cred.RefreshToken != "" {
+			refreshInfo = "✓有refresh"
+		} else {
+			refreshInfo = "✗无refresh"
+		}
 		if payload != nil {
 			cliproxyCred.AccountID = payload.Auth.AccountID
 			if payload.Exp > 0 {
 				cliproxyCred.Expired = time.Unix(payload.Exp, 0).Format(time.RFC3339)
 				ttlDays := float64(payload.Exp-time.Now().Unix()) / 86400
-				ttlInfo = fmt.Sprintf("(剩余 %.1f 天)", ttlDays)
+				ttlInfo = fmt.Sprintf("(剩余%.1f天)", ttlDays)
 			}
 		}
 
@@ -155,7 +163,7 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 			continue
 		}
 
-		fmt.Printf("[%d] 转换成功: %s %s\n", i+1, email, ttlInfo)
+		fmt.Printf("[%d] 转换成功: %s %s %s\n", i+1, email, refreshInfo, ttlInfo)
 		converted++
 	}
 
