@@ -221,7 +221,7 @@ func DefaultConfig() *Config {
 		Headless:  true,
 		Timeout:   60,
 		Debug:     false,
-		OutputDir: "/openai_register/creds",
+		OutputDir: "./creds",
 		Count:     1,
 	}
 }
@@ -1727,7 +1727,7 @@ func (br *BrowserRegister) saveDebugScreenshot(page *rod.Page, name string) {
 		return
 	}
 	
-	filename := fmt.Sprintf("/openai_register/debug_%s.png", name)
+	filename := fmt.Sprintf("./debug_%s.png", name)
 	if err := os.WriteFile(filename, screenshot, 0644); err == nil {
 		fmt.Printf("  [调试] 截图已保存: %s\n", filename)
 	}
@@ -1857,7 +1857,7 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 
 // SaveCredentials 保存凭证到文件 (使用默认目录)
 func SaveCredentials(credentials *AccountCredentials) error {
-	return SaveCredentialsWithDir(credentials, "/openai_register/creds")
+	return SaveCredentialsWithDir(credentials, "./creds")
 }
 
 func main() {
@@ -1870,7 +1870,7 @@ func main() {
 	fmt.Println()
 
 	// 加载配置
-	configPath := "/openai_register/config.json"
+	configPath := "./config.json"
 	config, err := LoadConfig(configPath)
 	if err != nil {
 		fmt.Printf("加载配置失败: %v，使用默认配置\n", err)
