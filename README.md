@@ -131,6 +131,13 @@ curl http://localhost:8317/v1/chat/completions \
 - 自动处理 Cloudflare 验证（代理 + 隐蔽脚本）
 - 自动处理 OTP 验证码
 - 自动填写用户信息页面
+- 随机设备指纹（避免账号关联）
+- 导出多种格式的凭证
+- **注意：refresh_token 获取受限**（详见常见问题 Q7）
+- 自动获取临时邮箱（chatgpt.org.uk API）
+- 自动处理 Cloudflare 验证（代理 + 隐蔽脚本）
+- 自动处理 OTP 验证码
+- 自动填写用户信息页面
 - 导出多种格式的凭证
 
 ### 1.2 系统要求
@@ -588,6 +595,56 @@ CLIProxyAPI 自动支持多账号负载均衡：
 2. 配置 `routing.strategy`:
    - `round-robin`: 轮询（默认）
    - `fill-first`: 优先使用第一个可用账号
+
+### Q7: 为什么无法获取 refresh_token？
+
+**原因：** OpenAI 对 refresh_token 获取有严格限制
+
+**详细说明：**
+
+注册机已实现两种 refresh_token 获取方法，但都有限制：
+
+1. **Device Code OAuth 流程**
+   - 需要 ChatGPT Plus/Pro/Team/Enterprise 订阅
+   - 需要在设置页面手动启用设备代码认证
+   - 设置路径：`https://chatgpt.com/codex/settings/general#settings/Security`
+   - 使用临时邮箱注册的免费账号无法使用此功能
+
+2. **iOS App OAuth 流程**
+   - 需要 preauth_cookie 或 device_token
+   - preauth_cookie 需要通过第三方服务获取（目前不可用）
+   - device_token 需要 Apple 设备认证令牌
+
+**解决方案：**
+
+1. **使用 ChatGPT Plus 账号**
+   - 在有 Plus 订阅的账号上手动启用设备代码认证
+   - 使用 `--device-only` 参数单独测试 refresh_token 获取
+
+2. **仅使用 access_token**
+   - access_token 有效期约 10 天
+   - 定期重新注册新账号获取新 token
+   - CLIProxyAPI 可以直接使用 access_token
+
+3. **手动获取 refresh_token**
+   - 登录有 Plus 订阅的账号
+   - 访问 `https://chatgpt.com/codex/settings/general#settings/Security`
+   - 启用设备代码认证后，使用 `--device-only` 模式获取
+
+**技术细节：**
+
+Device Code 流程端点：
+- UserCode: `POST https://auth.openai.com/api/accounts/deviceauth/usercode`
+- Token Poll: `POST https://auth.openai.com/api/accounts/deviceauth/token`
+- Token Exchange: `POST https://auth.openai.com/oauth/token`
+- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
+
+iOS App OAuth 端点：
+- Authorize: `https://auth0.openai.com/authorize`
+- Token: `https://auth0.openai.com/oauth/token`
+- Client ID: `pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh`
+
+错误码 `deviceauth_authorization_unknown` 表示账号未启用设备代码认证。
 
 ---
 

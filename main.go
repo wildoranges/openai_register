@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +37,7 @@ func NewLocalProxyForwarder(proxyURL string) (*LocalProxyForwarder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("解析代理URL失败: %v", err)
 	}
-	
+
 	// 构建Proxy-Authorization头
 	var authHeader string
 	if targetURL.User != nil {
@@ -41,7 +45,7 @@ func NewLocalProxyForwarder(proxyURL string) (*LocalProxyForwarder, error) {
 		auth := base64.StdEncoding.EncodeToString([]byte(targetURL.User.Username() + ":" + password))
 		authHeader = "Basic " + auth
 	}
-	
+
 	return &LocalProxyForwarder{
 		targetURL:  targetURL,
 		authHeader: authHeader,
@@ -55,7 +59,7 @@ func (lpf *LocalProxyForwarder) Start() (string, error) {
 		return "", fmt.Errorf("启动本地代理监听失败: %v", err)
 	}
 	lpf.listener = listener
-	
+
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -65,34 +69,34 @@ func (lpf *LocalProxyForwarder) Start() (string, error) {
 			go lpf.handleConnection(conn)
 		}
 	}()
-	
+
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
 		return "", err
 	}
-	
+
 	return "127.0.0.1:" + port, nil
 }
 
 // handleConnection 处理连接
 func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
-	
+
 	// 读取客户端请求
 	buf := make([]byte, 4096)
 	n, err := clientConn.Read(buf)
 	if err != nil {
 		return
 	}
-	
+
 	request := string(buf[:n])
-	
+
 	// 解析请求方法和目标
 	lines := strings.Split(request, "\r\n")
 	if len(lines) == 0 {
 		return
 	}
-	
+
 	// 检查是否是CONNECT请求
 	if strings.HasPrefix(lines[0], "CONNECT") {
 		// 对于CONNECT，直接连接目标服务器
@@ -101,40 +105,40 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 			return
 		}
 		targetAddr := parts[1]
-		
+
 		// 连接到目标代理
 		proxyConn, err := net.Dial("tcp", lpf.targetURL.Host)
 		if err != nil {
 			return
 		}
 		defer proxyConn.Close()
-		
+
 		// 发送带认证的CONNECT请求到上级代理
 		connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
 		if lpf.authHeader != "" {
 			connectReq += fmt.Sprintf("Proxy-Authorization: %s\r\n", lpf.authHeader)
 		}
 		connectReq += "\r\n"
-		
+
 		proxyConn.Write([]byte(connectReq))
-		
+
 		// 读取代理响应
 		respBuf := make([]byte, 1024)
 		proxyN, err := proxyConn.Read(respBuf)
 		if err != nil {
 			return
 		}
-		
+
 		// 检查响应是否成功
 		resp := string(respBuf[:proxyN])
 		if !strings.Contains(resp, "200") {
 			fmt.Printf("代理连接失败: %s\n", resp)
 			return
 		}
-		
+
 		// 向客户端返回成功
 		clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-		
+
 		// 双向转发数据
 		go func() {
 			buf := make([]byte, 32*1024)
@@ -146,7 +150,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 				clientConn.Write(buf[:n])
 			}
 		}()
-		
+
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := clientConn.Read(buf)
@@ -162,7 +166,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 			return
 		}
 		defer proxyConn.Close()
-		
+
 		// 添加Proxy-Authorization头
 		if lpf.authHeader != "" && !strings.Contains(request, "Proxy-Authorization") {
 			// 在第一行后插入认证头
@@ -174,7 +178,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 		} else {
 			proxyConn.Write(buf[:n])
 		}
-		
+
 		// 双向转发
 		go func() {
 			buf := make([]byte, 32*1024)
@@ -186,7 +190,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 				clientConn.Write(buf[:n])
 			}
 		}()
-		
+
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := clientConn.Read(buf)
@@ -207,12 +211,12 @@ func (lpf *LocalProxyForwarder) Stop() {
 
 // Config 配置结构
 type Config struct {
-	Proxy      string `json:"proxy"`       // 代理地址，如 http://proxy-host:port
-	Headless   bool   `json:"headless"`    // 是否无头模式
-	Timeout    int    `json:"timeout"`     // 超时时间(秒)
-	Debug      bool   `json:"debug"`       // 调试模式
-	OutputDir  string `json:"output_dir"`  // 输出目录
-	Count      int    `json:"count"`       // 注册账号数量
+	Proxy     string `json:"proxy"`      // 代理地址，如 http://proxy-host:port
+	Headless  bool   `json:"headless"`   // 是否无头模式
+	Timeout   int    `json:"timeout"`    // 超时时间(秒)
+	Debug     bool   `json:"debug"`      // 调试模式
+	OutputDir string `json:"output_dir"` // 输出目录
+	Count     int    `json:"count"`      // 注册账号数量
 }
 
 // DefaultConfig 默认配置
@@ -229,17 +233,17 @@ func DefaultConfig() *Config {
 // LoadConfig 从文件加载配置
 func LoadConfig(path string) (*Config, error) {
 	config := DefaultConfig()
-	
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// 配置文件不存在，使用默认配置
 		return config, nil
 	}
-	
+
 	if err := json.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
 	}
-	
+
 	return config, nil
 }
 
@@ -312,7 +316,7 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 	client := &http.Client{
 		Timeout: 60 * time.Second,
 	}
-	
+
 	if proxyURL != "" {
 		proxyParsed, err := url.Parse(proxyURL)
 		if err == nil {
@@ -321,7 +325,7 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 			}
 		}
 	}
-	
+
 	return &HTTPClient{client: client}
 }
 
@@ -477,11 +481,11 @@ func (c *HTTPClient) getMailTmEmail() string {
 }
 
 // MailService 邮箱服务信息
- type MailService struct {
-	Name    string
-	Email   string
-	Token   string // 用于Mail.tm等需要认证的服务
-	Domain  string
+type MailService struct {
+	Name   string
+	Email  string
+	Token  string // 用于Mail.tm等需要认证的服务
+	Domain string
 }
 
 // currentMailService 当前使用的邮箱服务
@@ -789,18 +793,80 @@ func randomString(length int) string {
 	}
 	return string(result)
 }
+
 // BrowserRegister 浏览器自动化注册
 type BrowserRegister struct {
-	browser    *rod.Browser
-	httpClient *HTTPClient
-	config     *Config
+	browser     *rod.Browser
+	httpClient  *HTTPClient
+	config      *Config
+	fingerprint *DeviceFingerprint
 }
 
 func NewBrowserRegister(config *Config) *BrowserRegister {
 	return &BrowserRegister{
-		httpClient: NewHTTPClientWithProxy(config.Proxy),
-		config:     config,
+		httpClient:  NewHTTPClientWithProxy(config.Proxy),
+		config:      config,
+		fingerprint: generateDeviceFingerprint(),
 	}
+}
+
+func (br *BrowserRegister) openBrowser() (func(), error) {
+	path, found := launcher.LookPath()
+	if !found {
+		return nil, fmt.Errorf("未找到系统浏览器")
+	}
+	l := launcher.New().Bin(path).Headless(br.config.Headless).
+		Set("no-sandbox", "true").
+		Set("disable-blink-features", "AutomationControlled").
+		Set("disable-infobars", "true").
+		Set("excludeSwitches", "enable-automation").
+		Set("useAutomationExtension", "false").
+		Set("disable-gpu", "true").
+		Set("disable-dev-shm-usage", "true").
+		Set("disable-software-rasterizer", "true").
+		Set("disable-web-security", "true").
+		Set("disable-features", "IsolateOrigins,site-per-process").
+		Set("window-size", fmt.Sprintf("%d,%d", br.fingerprint.ScreenWidth, br.fingerprint.ScreenHeight)).
+		Set("user-agent", br.fingerprint.UserAgent)
+
+	var localProxy *LocalProxyForwarder
+	if br.config.Proxy != "" {
+		proxyURL, err := url.Parse(br.config.Proxy)
+		if err == nil {
+			if proxyURL.User != nil {
+				localProxy, err = NewLocalProxyForwarder(br.config.Proxy)
+				if err != nil {
+					return nil, fmt.Errorf("创建本地代理失败: %v", err)
+				}
+				localAddr, err := localProxy.Start()
+				if err != nil {
+					return nil, fmt.Errorf("启动本地代理失败: %v", err)
+				}
+				l = l.Set("proxy-server", localAddr)
+			} else {
+				l = l.Set("proxy-server", proxyURL.Host)
+			}
+		}
+	}
+
+	u, err := l.Launch()
+	if err != nil {
+		if localProxy != nil {
+			localProxy.Stop()
+		}
+		return nil, fmt.Errorf("启动浏览器失败: %v", err)
+	}
+
+	br.browser = rod.New().ControlURL(u).MustConnect()
+	cleanup := func() {
+		if br.browser != nil {
+			br.browser.MustClose()
+		}
+		if localProxy != nil {
+			localProxy.Stop()
+		}
+	}
+	return cleanup, nil
 }
 
 // Point 鼠标轨迹点
@@ -837,7 +903,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		return nil, fmt.Errorf("未找到系统浏览器")
 	}
 	fmt.Printf("使用浏览器: %s\n", path)
-	
+
 	if br.config.Proxy != "" {
 		fmt.Printf("使用代理: %s\n", br.config.Proxy)
 	}
@@ -853,9 +919,9 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		Set("disable-software-rasterizer", "true").
 		Set("disable-web-security", "true").
 		Set("disable-features", "IsolateOrigins,site-per-process").
-		Set("window-size", "1920,1080").
-		Set("user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-	
+		Set("window-size", fmt.Sprintf("%d,%d", br.fingerprint.ScreenWidth, br.fingerprint.ScreenHeight)).
+		Set("user-agent", br.fingerprint.UserAgent)
+
 	// 设置代理
 	var localProxy *LocalProxyForwarder
 	if br.config.Proxy != "" {
@@ -893,70 +959,61 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	// 使用直接的注册URL - auth.openai.com
 	signupURL := "https://auth.openai.com/authorize?client_id=TdJIcbe16WoTHtN95nyywh5E4yOo6ItG&audience=https%3A%2F%2Fapi.openai.com%2Fv1&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fapi%2Fauth%2Fcallback%2Flogin-web&scope=openid+email+profile+offline_access+model.request+model.read+organization.read+organization.write&response_type=code&response_mode=query&state=state_is_immaterial&code_challenge=challenge_is_immaterial&code_challenge_method=S256&screen_hint=signup"
-	
+
 	page := br.browser.MustPage(signupURL)
 
-	// 完整的隐蔽模式脚本 - 绕过各种检测
 	fmt.Println("注入隐蔽脚本...")
+	fmt.Printf("设备指纹: UA=%s, Screen=%dx%d, TZ=%s\n",
+		br.fingerprint.UserAgent[:min(50, len(br.fingerprint.UserAgent))],
+		br.fingerprint.ScreenWidth,
+		br.fingerprint.ScreenHeight,
+		br.fingerprint.Timezone)
 	page.MustEval(`() => {
-		// 移除webdriver标记
 		Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-		
-		// 伪造plugins
-		Object.defineProperty(navigator, 'plugins', {
-			get: () => {
-				return [
-					{description: 'Portable Document Format', filename: 'internal-pdf-viewer', name: 'Chrome PDF Plugin'},
-					{description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', name: 'Chrome PDF Viewer'},
-					{description: '', filename: 'internal-nacl-plugin', name: 'Native Client'}
-				];
-			}
-		});
-		
-		// 伪造languages
-		Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en', 'zh-CN']});
-		
-		// 伪造platform
-		Object.defineProperty(navigator, 'platform', {get: () => 'Linux x86_64'});
-		
-		// 伪造hardwareConcurrency
-		Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-		
-		// 伪造deviceMemory
-		Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
-		
-		// 添加chrome对象
-		window.chrome = {
-			runtime: {connect: function() {}, sendMessage: function() {}},
-			loadTimes: function() {},
-			csi: function() {},
-			app: {}
-		};
-		
-		// 覆盖permissions查询
-		const originalQuery = window.navigator.permissions.query;
-		window.navigator.permissions.query = (parameters) => (
-			parameters.name === 'notifications' ?
-				Promise.resolve({ state: Notification.permission }) :
-				originalQuery(parameters)
-		);
-		
-		// 伪造connection信息
-		Object.defineProperty(navigator, 'connection', {
-			get: () => ({
-				effectiveType: '4g',
-				rtt: 50,
-				downlink: 10,
-				saveData: false
-			})
-		});
-		
-		console.log('Stealth mode activated');
+		window.chrome = {runtime: {}};
 	}`)
 
+	// 捕获控制台错误
+	page.MustEval(`() => {
+		window.__errors = [];
+		window.addEventListener('error', (e) => window.__errors.push(e.message));
+		window.addEventListener('unhandledrejection', (e) => window.__errors.push(e.reason));
+	}`)
+
+	// 等待更长时间让React完全加载
+	fmt.Println("等待React应用加载...")
+	time.Sleep(10 * time.Second)
 	// 等待页面加载和React渲染
 	fmt.Println("等待页面加载...")
 	time.Sleep(5 * time.Second)
+
+	// 检查页面状态
+	currentURL, _ := page.Eval("() => window.location.href")
+	fmt.Printf("当前URL: %s\n", currentURL.Value.String())
+
+	// 获取页面HTML片段
+	htmlSnippet, _ := page.Eval("() => document.body ? document.body.innerHTML.substring(0, 500) : 'no body'")
+	fmt.Printf("页面HTML片段: %s...\n", htmlSnippet.Value.String()[:min(200, len(htmlSnippet.Value.String()))])
+
+	// 检查JS错误
+	errors, _ := page.Eval("() => window.__errors || []")
+	fmt.Printf("JS错误: %v\n", errors.Value)
+
+	// 获取完整body内容
+	fullBody, _ := page.Eval("() => document.body ? document.body.innerHTML : 'no body'")
+	bodyStr := fullBody.Value.String()
+	fmt.Printf("Body长度: %d\n", len(bodyStr))
+	if len(bodyStr) > 500 {
+		fmt.Printf("Body内容(前300字符): %s...\n", bodyStr[:300])
+		fmt.Printf("Body内容(后300字符): ...%s\n", bodyStr[len(bodyStr)-300:])
+	}
+	// 检查是否有cf-挑战
+	cfChallenge, _ := page.Eval("() => document.querySelector('iframe[src*=challenges]') ? true : false")
+	fmt.Printf("Cloudflare iframe: %v\n", cfChallenge.Value)
+
+	// 检查页面标题
+	title, _ := page.Eval("() => document.title")
+	fmt.Printf("页面标题: %v\n", title.Value)
 
 	// 处理Cloudflare挑战
 	br.handleCloudflare(page)
@@ -965,9 +1022,54 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	// 截图调试
 	br.saveDebugScreenshot(page, "01_initial_load")
 
-	// 步骤0: 点击 "Sign up for free" 按钮
-	fmt.Println("\n步骤0: 点击 Sign up for free...")
-	
+	// 等待表单加载
+	fmt.Println("等待表单加载...")
+	for i := 0; i < 20; i++ {
+		time.Sleep(1 * time.Second)
+		url, _ := page.Eval("() => window.location.href")
+		inputs, _ := page.Elements("input")
+		fmt.Printf("  [%ds] URL: %s | Inputs: %d\n", i+1, url.Value.String(), len(inputs))
+
+		// 检查页面上的其他元素
+		buttons, _ := page.Elements("button")
+		divs, _ := page.Elements("div")
+		fmt.Printf("       Buttons: %d | Divs: %d\n", len(buttons), len(divs))
+
+		if len(inputs) > 0 || len(buttons) >= 1 {
+			fmt.Println("  页面已加载!")
+			break
+		}
+
+		// 超时检查
+		if i >= 15 {
+			fmt.Println("  等待超时，继续尝试...")
+			break
+		}
+	}
+
+	br.handleCloudflare(page)
+	br.saveDebugScreenshot(page, "02_after_wait")
+
+	// 步骤0: 点击 "Sign up" 或 "Continue with email" 按钮
+	fmt.Println("\n步骤0: 查找登录选项...")
+
+	// 打印所有按钮文本
+	allButtons, _ := page.Elements("button")
+	fmt.Printf("找到 %d 个按钮:\n", len(allButtons))
+	for i, btn := range allButtons {
+		text, _ := btn.Eval("() => this.innerText || this.textContent || ''")
+		fmt.Printf("  按钮 %d: %s\n", i+1, text.Value.String())
+	}
+
+	// 查找 Sign up 链接
+	links, _ := page.Elements("a")
+	fmt.Printf("找到 %d 个链接:\n", len(links))
+	for i, link := range links {
+		href, _ := link.Eval("() => this.href")
+		text, _ := link.Eval("() => this.innerText || this.textContent || ''")
+		fmt.Printf("  链接 %d: %s -> %s\n", i+1, text.Value.String(), href.Value.String())
+	}
+
 	// 尝试通过文本点击
 	signupClicked := false
 	for i := 0; i < 5; i++ {
@@ -987,6 +1089,13 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 					signupClicked = true
 					break
 				}
+				// 新的登录流程：点击 "Continue" 按钮（纯文本，不带 Google/Apple/phone）
+				if btnText == "continue" || btnText == "continue with email" {
+					btn.Eval("() => this.click()")
+					fmt.Println("  已点击 'Continue' 按钮")
+					signupClicked = true
+					break
+				}
 			}
 		}
 		if signupClicked {
@@ -994,13 +1103,13 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		}
 		time.Sleep(1 * time.Second)
 	}
-	
+
 	if !signupClicked {
-		fmt.Println("⚠️ 未找到 Sign up 按钮")
+		fmt.Println("⚠️ 未找到 Sign up 或 Continue 按钮")
 		br.saveDebugScreenshot(page, "02_signup_not_found")
-		return nil, fmt.Errorf("未找到 Sign up 按钮")
+		return nil, fmt.Errorf("未找到 Sign up 或 Continue 按钮")
 	}
-	
+
 	// 等待页面跳转和React SPA加载 - 需要等待较长时间
 	fmt.Println("等待注册页面加载 (React SPA)...")
 	for i := 0; i < 20; i++ {
@@ -1013,14 +1122,14 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 			break
 		}
 	}
-	
+
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "02_after_signup_click")
 
 	// 步骤1: 输入邮箱
 	fmt.Println("\n步骤1: 输入邮箱...")
 	time.Sleep(1 * time.Second)
-	
+
 	emailSelectors := []string{
 		"input[name='email']",
 		"input[type='email']",
@@ -1031,7 +1140,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		"input[id='email-input']",
 		"input[data-testid='email-input']",
 	}
-	
+
 	if !br.inputTextWithWait(page, emailSelectors, email, "Email", 15*time.Second) {
 		fmt.Println("⚠️ 未找到邮箱输入框")
 		br.saveDebugScreenshot(page, "03_email_not_found")
@@ -1044,14 +1153,14 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	// 步骤2: 点击Continue按钮
 	fmt.Println("\n步骤2: 点击Continue...")
 	time.Sleep(1 * time.Second)
-	
+
 	continueClicked := br.clickButtonWithWait(page, []string{
 		"button[type='submit']",
 		"button[data-testid='continue-button']",
 		"button[name='continue']",
 		"input[type='submit']",
 	}, 10*time.Second)
-	
+
 	if !continueClicked {
 		// 尝试通过文本查找
 		if !br.clickElementByText(page, "button", "Continue") {
@@ -1060,7 +1169,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 			br.debugPageElements(page, "button")
 		}
 	}
-	
+
 	// 等待页面跳转/加载
 	fmt.Println("等待页面响应...")
 	time.Sleep(3 * time.Second)
@@ -1070,7 +1179,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	// 步骤3: 输入密码（可能在同一页面或新页面）
 	fmt.Println("\n步骤3: 输入密码...")
 	time.Sleep(2 * time.Second)
-	
+
 	passwordSelectors := []string{
 		"input[name='password']",
 		"input[type='password']",
@@ -1080,9 +1189,9 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		"input[placeholder*='password' i]",
 		"input[data-testid='password-input']",
 	}
-	
+
 	passwordFound := br.inputTextWithWait(page, passwordSelectors, password, "Password", 15*time.Second)
-	
+
 	if !passwordFound {
 		fmt.Println("⚠️ 未找到密码输入框，可能已使用OAuth或其他方式")
 		br.saveDebugScreenshot(page, "07_password_not_found")
@@ -1090,11 +1199,11 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		// 不返回错误，继续尝试
 	} else {
 		br.saveDebugScreenshot(page, "08_password_entered")
-		
+
 		// 步骤3: 点击Continue完成注册
 		fmt.Println("\n步骤3: 提交注册...")
 		time.Sleep(1 * time.Second)
-		
+
 		// 尝试多个可能的按钮文本
 		for _, btnText := range []string{"Continue", "Sign up", "Create account", "Create"} {
 			if br.clickElementByText(page, "button", btnText) {
@@ -1103,7 +1212,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		}
 		br.clickButtonWithWait(page, []string{"button[type='submit']"}, 5*time.Second)
 	}
-	
+
 	// 等待注册完成
 	fmt.Println("\n等待注册处理...")
 	time.Sleep(5 * time.Second)
@@ -1129,7 +1238,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 			// 处理OTP验证码
 			otpCode := strings.TrimPrefix(verifyLink, "OTP:")
 			fmt.Printf("检测到OTP验证码: %s\n", otpCode)
-			
+
 			// 输入OTP码
 			br.handleOTPInput(page, otpCode)
 		} else {
@@ -1147,7 +1256,12 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 		// 处理可能的后续步骤（姓名输入等）
 		fmt.Println("\n处理后续步骤...")
-		br.handlePostVerification(page)
+		if err := br.handlePostVerification(page); err != nil {
+			if err.Error() == "unsupported_email" {
+				return nil, fmt.Errorf("邮箱域名不被支持，请使用其他邮箱")
+			}
+			fmt.Printf("后续步骤处理错误: %v\n", err)
+		}
 	}
 
 	// 步骤5: 获取access token
@@ -1159,7 +1273,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		return nil, fmt.Errorf("获取Access Token失败")
 	}
 
-credentials := &AccountCredentials{
+	credentials := &AccountCredentials{
 		Email:       email,
 		Password:    password,
 		AccessToken: accessToken,
@@ -1167,15 +1281,23 @@ credentials := &AccountCredentials{
 		CreatedAt:   time.Now(),
 	}
 
-	// 步骤6: 尝试通过设备码流程获取 refresh_token
-	refreshToken, idToken, err := br.getRefreshTokenViaDeviceFlow(email, password)
+	// 步骤6: 尝试通过 iOS App OAuth 流程获取 refresh_token (无需 Plus 订阅)
+	refreshToken, idToken, err := br.getRefreshTokenViaIOSAppFlow(page, email, password)
 	if err != nil {
-		fmt.Printf("获取 refresh_token 失败（不影响使用）: %v\n", err)
-	} else if refreshToken != "" {
+		fmt.Printf("iOS App OAuth 流程失败: %v\n", err)
+		fmt.Println("尝试设备码流程...")
+		// 回退到设备码流程
+		refreshToken, idToken, err = br.getRefreshTokenViaDeviceFlow(page, email, password)
+		if err != nil {
+			fmt.Printf("设备码流程也失败（不影响使用）: %v\n", err)
+		}
+	}
+	if refreshToken != "" {
 		credentials.RefreshToken = refreshToken
 		credentials.IDToken = idToken
 		fmt.Println("成功获取 refresh_token!")
 	}
+
 
 	br.saveDebugScreenshot(page, "11_success")
 	return credentials, nil
@@ -1359,10 +1481,10 @@ func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
 }
 
 // handlePostVerification 处理验证后的步骤
-func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
+func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 	step := 0 // 0: 初始, 1: 已提交
 	name := ""
-	
+
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
 
@@ -1372,18 +1494,18 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
 		// 已跳转到主页面
 		if strings.Contains(currentURL, "chatgpt.com") && !strings.Contains(currentURL, "auth") && !strings.Contains(currentURL, "log-in") && !strings.Contains(currentURL, "about-you") {
 			fmt.Println("已跳转到主页面!")
-			return
+			return nil
 		}
 
 		// 处理 about-you 页面
 		if strings.Contains(currentURL, "about-you") {
-			
+
 			if step == 0 {
 				// 输入姓名
 				nameInput, _ := page.Timeout(2 * time.Second).Element("input[name='name']")
 				if nameInput != nil {
 					val, _ := nameInput.Eval(`() => this.value`)
-if len(val.Value.String()) == 0 {
+					if len(val.Value.String()) == 0 {
 						// 使用真实的英文名，不含数字
 						names := []string{"James", "John", "Robert", "Michael", "David", "William", "Richard", "Joseph", "Thomas", "Charles", "Daniel", "Matthew", "Anthony", "Mark", "Steven", "Paul", "Andrew", "Joshua", "Kenneth", "Kevin", "Brian", "George", "Edward", "Ronald", "Timothy", "Jason", "Jeffrey", "Ryan", "Jacob", "Gary", "Nicholas", "Eric", "Jonathan", "Stephen", "Larry", "Justin", "Scott", "Brandon", "Raymond", "Samuel", "Benjamin", "Gregory", "Frank", "Alexander", "Patrick", "Jack", "Dennis", "Jerry", "Tyler", "Aaron", "Jose", "Adam", "Henry", "Nathan", "Douglas", "Zachary", "Peter", "Kyle"}
 						firstName := names[rand.Intn(len(names))]
@@ -1397,12 +1519,12 @@ if len(val.Value.String()) == 0 {
 						name = val.Value.String()
 					}
 				}
-				
+
 				// 使用 React 原生方法设置隐藏的 birthday 字段
 				year := 1990 + rand.Intn(15)
 				birthdate := fmt.Sprintf("%d-01-15", year)
 				fmt.Printf("设置生日: %s\n", birthdate)
-				
+
 				// 使用 React 兼容的方式设置隐藏字段
 				result := page.MustEval(fmt.Sprintf(`() => {
 					const input = document.querySelector('input[name="birthday"]');
@@ -1416,10 +1538,10 @@ if len(val.Value.String()) == 0 {
 					return {success: false, error: 'birthday input not found'};
 				}`, birthdate))
 				fmt.Printf("设置生日结果: %v\n", result)
-				
+
 				time.Sleep(500 * time.Millisecond)
-				
-// 尝试通过 API 提交
+
+				// 尝试通过 API 提交
 				fmt.Println("尝试通过 API 提交...")
 				apiResult := page.MustEval(fmt.Sprintf(`() => {
 					return fetch('https://auth.openai.com/api/accounts/create_account', {
@@ -1437,10 +1559,16 @@ if len(val.Value.String()) == 0 {
 					.catch(e => ({error: e.toString()}));
 				}`, name, birthdate))
 				fmt.Printf("API 结果: %v\n", apiResult)
-				
+
+				// 检查是否是不支持的邮箱
+				bodyStr := apiResult.Get("body").String()
+				if strings.Contains(bodyStr, "unsupported_email") {
+					fmt.Println("❌ 邮箱域名不被 OpenAI 支持")
+					return fmt.Errorf("unsupported_email")
+				}
+
 				// 解析 API 响应，提取 continue_url
 				if apiResult.Get("ok").Bool() {
-					bodyStr := apiResult.Get("body").String()
 					var apiResp struct {
 						ContinueURL string `json:"continue_url"`
 					}
@@ -1454,9 +1582,9 @@ if len(val.Value.String()) == 0 {
 						continue
 					}
 				}
-				
+
 				time.Sleep(2 * time.Second)
-				
+
 				// 也尝试点击 Submit 按钮
 				submitBtn, _ := page.Timeout(1 * time.Second).Element("button[type='submit']")
 				if submitBtn != nil {
@@ -1467,13 +1595,13 @@ if len(val.Value.String()) == 0 {
 						time.Sleep(2 * time.Second)
 					}
 				}
-				
+
 				step = 1
 			} else if step == 1 {
 				// 已提交，等待跳转
 				fmt.Println("等待页面跳转...")
 			}
-			
+
 			br.saveDebugScreenshot(page, fmt.Sprintf("11_about_you_step%d", step))
 			continue
 		}
@@ -1482,6 +1610,8 @@ if len(val.Value.String()) == 0 {
 		br.clickElementByText(page, "button", "Agree")
 		br.clickElementByText(page, "button", "Accept")
 	}
+
+	return nil
 }
 
 // getAccessToken 获取Access Token
@@ -1524,7 +1654,7 @@ func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
 		// 解析JSON
 		var session struct {
 			AccessToken string `json:"accessToken"`
-			User       struct {
+			User        struct {
 				ID string `json:"id"`
 			} `json:"user"`
 		}
@@ -1575,6 +1705,7 @@ func (br *BrowserRegister) clickElementByText(page *rod.Page, tag, text string) 
 	}
 	return false
 }
+
 // findElementByText 通过文本查找元素
 func (br *BrowserRegister) findElementByText(page *rod.Page, tag, text string) *rod.Element {
 	elements, err := page.Elements(tag)
@@ -1593,7 +1724,6 @@ func (br *BrowserRegister) findElementByText(page *rod.Page, tag, text string) *
 	}
 	return nil
 }
-
 
 // clickElement 点击元素
 func (br *BrowserRegister) clickElement(page *rod.Page, selectors []string, desc string) bool {
@@ -1660,7 +1790,7 @@ func (br *BrowserRegister) waitForReactComponents(page *rod.Page) {
 // inputTextWithWait 带等待的文本输入
 func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string, text, desc string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	
+
 	for time.Now().Before(deadline) {
 		for _, sel := range selectors {
 			el, err := page.Timeout(2 * time.Second).Element(sel)
@@ -1686,7 +1816,7 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 			// 清空并输入
 			el.Eval(`() => this.value = ''`)
 			time.Sleep(100 * time.Millisecond)
-			
+
 			if err := el.Input(text); err != nil {
 				continue
 			}
@@ -1696,7 +1826,7 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	
+
 	fmt.Printf("  %s: 超时未找到\n", desc)
 	return false
 }
@@ -1704,7 +1834,7 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 // clickButtonWithWait 带等待的按钮点击
 func (br *BrowserRegister) clickButtonWithWait(page *rod.Page, selectors []string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	
+
 	for time.Now().Before(deadline) {
 		for _, sel := range selectors {
 			el, err := page.Timeout(2 * time.Second).Element(sel)
@@ -1728,7 +1858,7 @@ func (br *BrowserRegister) clickButtonWithWait(page *rod.Page, selectors []strin
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	
+
 	return false
 }
 
@@ -1738,7 +1868,7 @@ func (br *BrowserRegister) saveDebugScreenshot(page *rod.Page, name string) {
 	if err != nil {
 		return
 	}
-	
+
 	filename := fmt.Sprintf("/openai_register/debug_%s.png", name)
 	if err := os.WriteFile(filename, screenshot, 0644); err == nil {
 		fmt.Printf("  [调试] 截图已保存: %s\n", filename)
@@ -1748,28 +1878,28 @@ func (br *BrowserRegister) saveDebugScreenshot(page *rod.Page, name string) {
 // debugPageElements 打印页面元素用于调试
 func (br *BrowserRegister) debugPageElements(page *rod.Page, tag string) {
 	fmt.Printf("\n[调试] 页面 %s 元素:\n", tag)
-	
+
 	elements, err := page.Elements(tag)
 	if err != nil {
 		fmt.Printf("  获取元素失败: %v\n", err)
 		return
 	}
-	
+
 	fmt.Printf("  找到 %d 个 %s 元素\n", len(elements), tag)
-	
+
 	for i, el := range elements {
 		if i >= 10 {
 			fmt.Println("  ... (更多元素已省略)")
 			break
 		}
-		
+
 		// 直接获取属性
 		name, _ := el.Eval(`() => this.name || this.id || ''`)
 		typ, _ := el.Eval(`() => this.type || ''`)
 		placeholder, _ := el.Eval(`() => this.placeholder || ''`)
-		
-		fmt.Printf("  [%d] name=%s type=%s placeholder=%s\n", 
-			i, 
+
+		fmt.Printf("  [%d] name=%s type=%s placeholder=%s\n",
+			i,
 			name.Value.String(),
 			typ.Value.String(),
 			placeholder.Value.String())
@@ -1814,7 +1944,7 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		return err
 	}
 
-// 同时保存为CodeX格式
+	// 同时保存为CodeX格式
 	codexAuth := map[string]interface{}{
 		"access_token":  credentials.AccessToken,
 		"refresh_token": credentials.RefreshToken,
@@ -1861,7 +1991,7 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		existingTokens = strings.Join(newLines, "\n")
 	}
 
-// 追加新记录
+	// 追加新记录
 	newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_REFRESH_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
 		credentials.Email, credentials.AccessToken, credentials.RefreshToken, credentials.Email, credentials.Password)
 	existingTokens += newRecord
@@ -1876,6 +2006,57 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 // SaveCredentials 保存凭证到文件 (使用默认目录)
 func SaveCredentials(credentials *AccountCredentials) error {
 	return SaveCredentialsWithDir(credentials, "/openai_register/creds")
+}
+
+func loadLastCredential(path string) (*AccountCredentials, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var all []AccountCredentials
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, fmt.Errorf("no credentials")
+	}
+	last := all[len(all)-1]
+	return &last, nil
+}
+
+func runDeviceFlowOnly(config *Config) error {
+	cred, err := loadLastCredential(filepath.Join(config.OutputDir, "openai_credentials.json"))
+	if err != nil {
+		return fmt.Errorf("加载最近凭证失败: %w", err)
+	}
+	if cred.Email == "" || cred.Password == "" {
+		return fmt.Errorf("最近凭证缺少 email/password")
+	}
+	br := NewBrowserRegister(config)
+	cleanup, err := br.openBrowser()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	page, err := br.browser.Page(proto.TargetCreateTarget{URL: codexDeviceVerificationURL})
+	if err != nil {
+		return fmt.Errorf("打开验证页面失败: %w", err)
+	}
+	defer page.Close()
+	refreshToken, idToken, err := br.getRefreshTokenViaDeviceFlow(page, cred.Email, cred.Password)
+	if err != nil {
+		return fmt.Errorf("device flow 失败: %w", err)
+	}
+	if refreshToken == "" {
+		return fmt.Errorf("device flow 未返回 refresh_token")
+	}
+	cred.RefreshToken = refreshToken
+	cred.IDToken = idToken
+	if err := SaveCredentialsWithDir(cred, config.OutputDir); err != nil {
+		return fmt.Errorf("保存 refresh_token 失败: %w", err)
+	}
+	fmt.Println("device flow 成功并已写入 refresh_token")
+	return nil
 }
 
 func main() {
@@ -1894,33 +2075,40 @@ func main() {
 		fmt.Printf("加载配置失败: %v，使用默认配置\n", err)
 		config = DefaultConfig()
 	}
-	
+
 	// 检查命令行参数
 	simMode := false
-	count := config.Count  // 默认使用配置文件中的数量
+	count := config.Count // 默认使用配置文件中的数量
+	deviceOnlyMode := false
 	for _, arg := range os.Args[1:] {
 		if arg == "--sim" || arg == "-sim" {
 			simMode = true
+		} else if arg == "--device-only" || arg == "-device-only" {
+			deviceOnlyMode = true
 		} else if arg == "--head" || arg == "-head" {
 			config.Headless = false
 		} else if arg == "--debug" || arg == "-debug" {
 			config.Debug = true
 		} else {
-			fmt.Sscanf(arg, "%d", &count)  // 命令行覆盖配置
+			fmt.Sscanf(arg, "%d", &count) // 命令行覆盖配置
 		}
 	}
 	// 显示配置信息
-if config.Proxy != "" {
+	if config.Proxy != "" {
 		fmt.Printf("代理: %s\n", config.Proxy)
 	}
 	fmt.Printf("无头模式: %v\n", config.Headless)
 	fmt.Printf("输出目录: %s\n", config.OutputDir)
 	fmt.Printf("注册数量: %d\n\n", count)
-	if simMode {
+	if deviceOnlyMode {
+		if err := runDeviceFlowOnly(config); err != nil {
+			fmt.Printf("device-only 模式失败: %v\n", err)
+		}
+	} else if simMode {
 		fmt.Println("[模拟模式] 生成测试凭证...")
 		for i := 0; i < count; i++ {
 			fmt.Printf("\n========== 生成第 %d/%d 个凭证 ==========\n", i+1, count)
-			
+
 			// 生成模拟凭证
 			ts := time.Now().Unix()
 			randStr := randomString(16)
@@ -1974,33 +2162,33 @@ if config.Proxy != "" {
 				continue
 			}
 
-		// 保存凭证
-		if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
-			fmt.Printf("保存凭证失败: %v\n", err)
-		}
+			// 保存凭证
+			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
+				fmt.Printf("保存凭证失败: %v\n", err)
+			}
 
-		fmt.Println("\n=== 注册成功 ===")
-		fmt.Printf("邮箱: %s\n", credentials.Email)
-		// 安全打印 token 前缀
-		if len(credentials.AccessToken) > 50 {
-			fmt.Printf("Access Token: %s...\n", credentials.AccessToken[:50])
-		} else {
-			fmt.Printf("Access Token: %s\n", credentials.AccessToken)
-		}
-		fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
+			fmt.Println("\n=== 注册成功 ===")
+			fmt.Printf("邮箱: %s\n", credentials.Email)
+			// 安全打印 token 前缀
+			if len(credentials.AccessToken) > 50 {
+				fmt.Printf("Access Token: %s...\n", credentials.AccessToken[:50])
+			} else {
+				fmt.Printf("Access Token: %s\n", credentials.AccessToken)
+			}
+			fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
 
-		// 等待一段时间再注册下一个
-		if i < count-1 {
-			waitTime := 30 + rand.Intn(30)
-			fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
-			time.Sleep(time.Duration(waitTime) * time.Second)
+			// 等待一段时间再注册下一个
+			if i < count-1 {
+				waitTime := 30 + rand.Intn(30)
+				fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+				time.Sleep(time.Duration(waitTime) * time.Second)
+			}
 		}
 	}
-}
 
-fmt.Println("\n====================================")
-fmt.Println("   所有账号处理完成")
-fmt.Println("====================================")
+	fmt.Println("\n====================================")
+	fmt.Println("   所有账号处理完成")
+	fmt.Println("====================================")
 }
 
 // ========================================
@@ -2008,15 +2196,256 @@ fmt.Println("====================================")
 // ========================================
 
 const (
-	codexClientID                = "app_EMoamEEZ73f0CkXaXp7hrann"
-	codexDeviceUserCodeURL       = "https://auth.openai.com/api/accounts/deviceauth/usercode"
-	codexDeviceTokenURL          = "https://auth.openai.com/api/accounts/deviceauth/token"
-	codexDeviceVerificationURL   = "https://auth.openai.com/codex/device"
-	codexDeviceCallbackURI       = "https://auth.openai.com/deviceauth/callback"
-	codexOAuthTokenURL           = "https://auth.openai.com/oauth/token"
-	codexDeviceTimeout           = 10 * time.Minute
-	codexDevicePollInterval      = 5 * time.Second
+	codexClientID              = "app_EMoamEEZ73f0CkXaXp7hrann"
+	codexDeviceUserCodeURL     = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+	codexDeviceTokenURL        = "https://auth.openai.com/api/accounts/deviceauth/token"
+	codexDeviceVerificationURL = "https://auth.openai.com/codex/device"
+	codexDeviceCallbackURI     = "https://auth.openai.com/deviceauth/callback"
+	codexOAuthTokenURL         = "https://auth.openai.com/oauth/token"
+	codexDeviceTimeout         = 10 * time.Minute
+	codexDevicePollInterval    = 5 * time.Second
 )
+
+// ========================================
+// iOS App OAuth 流程 - 获取 refresh_token (无需 Plus)
+// ========================================
+
+const (
+	iosAppClientID       = "pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh"
+	iosAppAuthorizeURL   = "https://auth0.openai.com/authorize"
+	iosAppTokenURL       = "https://auth0.openai.com/oauth/token"
+	iosAppRedirectURI    = "com.openai.chat://auth0.openai.com/ios/com.openai.chat/callback"
+	iosAppScope          = "openid email profile offline_access model.request model.read organization.read offline"
+	iosAppAudience       = "https://api.openai.com/v1"
+)
+
+// iOSAppOAuthResponse iOS App OAuth token 响应
+type iOSAppOAuthResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// generatePKCECodes 生成 PKCE code_verifier 和 code_challenge
+func generatePKCECodes() (codeVerifier, codeChallenge string, err error) {
+	// 生成 32 字节的随机数作为 code_verifier
+	verifierBytes := make([]byte, 32)
+	if _, err := cryptorand.Read(verifierBytes); err != nil {
+		return "", "", fmt.Errorf("生成 code_verifier 失败: %w", err)
+	}
+	codeVerifier = base64.RawURLEncoding.EncodeToString(verifierBytes)
+
+	// 使用 SHA256 生成 code_challenge
+	hash := sha256.Sum256([]byte(codeVerifier))
+	codeChallenge = base64.RawURLEncoding.EncodeToString(hash[:])
+
+	return codeVerifier, codeChallenge, nil
+}
+
+
+// getRefreshTokenViaIOSAppFlow 通过 iOS App OAuth 流程获取 refresh_token
+// 这个流程不需要 ChatGPT Plus 订阅
+func (br *BrowserRegister) getRefreshTokenViaIOSAppFlow(page *rod.Page, email, password string) (string, string, error) {
+	fmt.Println("\n尝试 iOS App OAuth 流程获取 Refresh Token...")
+
+	// 1. 生成 PKCE 代码
+	codeVerifier, codeChallenge, err := generatePKCECodes()
+	if err != nil {
+		return "", "", fmt.Errorf("生成 PKCE 失败: %w", err)
+	}
+	fmt.Printf("[ios-oauth] code_verifier=%s...\n", codeVerifier[:20])
+	fmt.Printf("[ios-oauth] code_challenge=%s\n", codeChallenge)
+
+	// 2. 构建授权 URL
+	authURL := fmt.Sprintf("%s?client_id=%s&audience=%s&redirect_uri=%s&scope=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&prompt=login",
+		iosAppAuthorizeURL,
+		iosAppClientID,
+		url.QueryEscape(iosAppAudience),
+		url.QueryEscape(iosAppRedirectURI),
+		url.QueryEscape(iosAppScope),
+		codeChallenge,
+	)
+	fmt.Printf("[ios-oauth] 授权 URL: %s\n", authURL)
+
+	// 3. 在新页面中打开授权 URL
+	authPage, err := br.browser.Page(proto.TargetCreateTarget{URL: authURL})
+	if err != nil {
+		return "", "", fmt.Errorf("打开授权页面失败: %w", err)
+	}
+	defer authPage.Close()
+
+	// 监听回调 URL
+	authPage.MustEval(`() => {
+		window.__iosCallback = null;
+		const origOpen = XMLHttpRequest.prototype.open;
+		XMLHttpRequest.prototype.open = function(method, url) {
+			if (url && url.includes('com.openai.chat://')) {
+				window.__iosCallback = url;
+			}
+			return origOpen.apply(this, arguments);
+		};
+	}`)
+
+	time.Sleep(3 * time.Second)
+
+	// 4. 检查是否需要登录
+	fmt.Println("[ios-oauth] 检查登录状态...")
+	currentURL := authPage.MustEval(`() => window.location.href`).String()
+	fmt.Printf("[ios-oauth] 当前 URL: %s\n", currentURL)
+
+	// 检查是否已经在登录页面
+	if strings.Contains(currentURL, "auth0.openai.com") || strings.Contains(currentURL, "login") {
+		fmt.Println("[ios-oauth] 需要登录，尝试自动填写...")
+
+		// 等待页面加载
+		time.Sleep(2 * time.Second)
+
+		// 尝试填写邮箱
+		emailInput, err := authPage.Timeout(10 * time.Second).Element("input[name='username'], input[type='email'], input[name='email']")
+		if err == nil {
+			emailInput.MustInput(email)
+			fmt.Printf("[ios-oauth] 已填写邮箱: %s\n", email)
+			time.Sleep(500 * time.Millisecond)
+
+			// 点击继续按钮
+			continueBtn, _ := authPage.Timeout(5 * time.Second).Element("button[type='submit'], button[name='action'], input[type='submit']")
+			if continueBtn != nil {
+				continueBtn.MustClick()
+				time.Sleep(2 * time.Second)
+			}
+
+			// 填写密码
+			passwordInput, _ := authPage.Timeout(10 * time.Second).Element("input[name='password'], input[type='password']")
+			if passwordInput != nil {
+				passwordInput.MustInput(password)
+				fmt.Println("[ios-oauth] 已填写密码")
+				time.Sleep(500 * time.Millisecond)
+
+				// 点击登录按钮
+				loginBtn, _ := authPage.Timeout(5 * time.Second).Element("button[type='submit'], button[name='action']")
+				if loginBtn != nil {
+					loginBtn.MustClick()
+					fmt.Println("[ios-oauth] 已点击登录")
+				}
+			}
+		}
+	}
+
+	// 5. 等待授权完成 (监听回调 URL)
+	fmt.Println("[ios-oauth] 等待授权回调...")
+	var callbackURL string
+	deadline := time.Now().Add(60 * time.Second)
+
+	for time.Now().Before(deadline) {
+		// 检查是否有回调 URL
+		callbackURL = authPage.MustEval(`() => window.__iosCallback || ""`).String()
+		if callbackURL != "" {
+			break
+		}
+
+		// 也检查当前 URL
+		currentURL = authPage.MustEval(`() => window.location.href`).String()
+		if strings.Contains(currentURL, "com.openai.chat://") {
+			callbackURL = currentURL
+			break
+		}
+
+		// 检查是否有错误
+		errorText := authPage.MustEval(`() => {
+			const errorEl = document.querySelector('.alert-error, .error, [class*="error"]');
+			return errorEl ? errorEl.innerText : "";
+		}`).String()
+		if errorText != "" {
+			return "", "", fmt.Errorf("授权失败: %s", errorText)
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+
+	if callbackURL == "" {
+		return "", "", fmt.Errorf("等待授权回调超时")
+	}
+
+	fmt.Printf("[ios-oauth] 回调 URL: %s\n", callbackURL)
+
+	// 6. 解析回调 URL 获取授权码
+	parsedURL, err := url.Parse(callbackURL)
+	if err != nil {
+		return "", "", fmt.Errorf("解析回调 URL 失败: %w", err)
+	}
+
+	code := parsedURL.Query().Get("code")
+	if code == "" {
+		// 尝试从 fragment 中获取
+		fragment := parsedURL.Fragment
+		if fragment != "" {
+			vals, _ := url.ParseQuery(fragment)
+			code = vals.Get("code")
+		}
+	}
+
+	if code == "" {
+		return "", "", fmt.Errorf("未找到授权码")
+	}
+	fmt.Printf("[ios-oauth] 获取到授权码: %s...\n", code[:min(20, len(code))])
+
+	// 7. 用授权码换取 tokens
+	tokenReq := map[string]string{
+		"grant_type":    "authorization_code",
+		"client_id":     iosAppClientID,
+		"code":          code,
+		"redirect_uri":  iosAppRedirectURI,
+		"code_verifier": codeVerifier,
+	}
+	tokenReqBody, _ := json.Marshal(tokenReq)
+
+	req, err := http.NewRequest("POST", iosAppTokenURL, bytes.NewReader(tokenReqBody))
+	if err != nil {
+		return "", "", fmt.Errorf("创建 token 请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	if br.config.Proxy != "" {
+		proxyURL, err := url.Parse(br.config.Proxy)
+		if err == nil {
+			httpClient.Transport = &http.Transport{
+				Proxy: http.ProxyURL(proxyURL),
+			}
+		}
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("token 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	fmt.Printf("[ios-oauth] token 响应状态: %d\n", resp.StatusCode)
+	fmt.Printf("[ios-oauth] token 响应: %s\n", string(respBody))
+
+	if resp.StatusCode != 200 {
+		return "", "", fmt.Errorf("token 交换失败: %s", string(respBody))
+	}
+
+	var tokenResp iOSAppOAuthResponse
+	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
+		return "", "", fmt.Errorf("解析 token 响应失败: %w", err)
+	}
+
+	if tokenResp.RefreshToken == "" {
+		return "", "", fmt.Errorf("响应中未包含 refresh_token")
+	}
+
+	fmt.Println("[ios-oauth] 成功获取 refresh_token!")
+	return tokenResp.RefreshToken, tokenResp.IDToken, nil
+}
+
+
 
 type deviceUserCodeRequest struct {
 	ClientID string `json:"client_id"`
@@ -2025,6 +2454,8 @@ type deviceUserCodeRequest struct {
 type deviceUserCodeResponse struct {
 	DeviceAuthID string `json:"device_auth_id"`
 	UserCode     string `json:"user_code"`
+	UserCodeAlt  string `json:"usercode"`
+	Interval     string `json:"interval"`
 }
 
 type deviceTokenResponse struct {
@@ -2039,6 +2470,33 @@ type oauthTokenResponse struct {
 	IDToken      string `json:"id_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
+}
+
+func requestDeviceUserCodeViaPage(page *rod.Page) (*deviceUserCodeResponse, error) {
+	result := page.MustEval(`() => {
+		return fetch('https://auth.openai.com/api/accounts/deviceauth/usercode', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Accept': 'application/json'
+			},
+			body: JSON.stringify({ client_id: 'app_EMoamEEZ73f0CkXaXp7hrann' })
+		}).then(async (r) => ({ status: r.status, body: await r.text() }))
+		  .catch((e) => ({ status: 0, body: String(e) }));
+	}`)
+
+	status := int(result.Get("status").Int())
+	body := result.Get("body").String()
+	fmt.Printf("[device-usercode-page] status=%d body=%s\n", status, body)
+	if status != 200 {
+		return nil, fmt.Errorf("页面请求设备码失败: %s", body)
+	}
+
+	var resp deviceUserCodeResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, fmt.Errorf("解析页面设备码响应失败: %w", err)
+	}
+	return &resp, nil
 }
 
 // requestDeviceUserCode 请求设备码
@@ -2079,10 +2537,12 @@ func requestDeviceUserCode(httpClient *http.Client) (*deviceUserCodeResponse, er
 }
 
 // pollDeviceToken 轮询获取授权码
-func pollDeviceToken(httpClient *http.Client, deviceAuthID, userCode string) (*deviceTokenResponse, error) {
+func pollDeviceToken(httpClient *http.Client, deviceAuthID, userCode string, interval time.Duration) (*deviceTokenResponse, error) {
 	deadline := time.Now().Add(codexDeviceTimeout)
+	attempt := 0
 
 	for {
+		attempt++
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("设备码认证超时")
 		}
@@ -2103,6 +2563,11 @@ func pollDeviceToken(httpClient *http.Client, deviceAuthID, userCode string) (*d
 
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if len(respBody) > 0 {
+			fmt.Printf("[device-poll] attempt=%d status=%d body=%s\n", attempt, resp.StatusCode, string(respBody))
+		} else {
+			fmt.Printf("[device-poll] attempt=%d status=%d body=<empty>\n", attempt, resp.StatusCode)
+		}
 
 		if resp.StatusCode == 200 {
 			var result deviceTokenResponse
@@ -2112,8 +2577,58 @@ func pollDeviceToken(httpClient *http.Client, deviceAuthID, userCode string) (*d
 			return &result, nil
 		}
 
-		// 继续轮询
-		time.Sleep(codexDevicePollInterval)
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+			time.Sleep(interval)
+			continue
+		}
+
+		time.Sleep(interval)
+	}
+}
+
+func pollDeviceTokenViaPage(page *rod.Page, deviceAuthID, userCode string, interval time.Duration) (*deviceTokenResponse, error) {
+	deadline := time.Now().Add(codexDeviceTimeout)
+	attempt := 0
+	for {
+		attempt++
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("设备码认证超时")
+		}
+
+		result := page.MustEval(`(deviceAuthID, userCode) => {
+			return fetch('https://auth.openai.com/api/accounts/deviceauth/token', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'application/json'
+				},
+				body: JSON.stringify({ device_auth_id: deviceAuthID, user_code: userCode })
+			}).then(async (r) => ({ status: r.status, body: await r.text() }))
+			  .catch((e) => ({ status: 0, body: String(e) }));
+		}`, deviceAuthID, userCode)
+
+		status := int(result.Get("status").Int())
+		body := result.Get("body").String()
+		if body != "" {
+			fmt.Printf("[device-poll-page] attempt=%d status=%d body=%s\n", attempt, status, body)
+		} else {
+			fmt.Printf("[device-poll-page] attempt=%d status=%d body=<empty>\n", attempt, status)
+		}
+
+		if status == 200 {
+			var tokenResp deviceTokenResponse
+			if err := json.Unmarshal([]byte(body), &tokenResp); err != nil {
+				return nil, fmt.Errorf("解析授权码响应失败: %w", err)
+			}
+			return &tokenResp, nil
+		}
+
+		if status == http.StatusForbidden || status == http.StatusNotFound {
+			time.Sleep(interval)
+			continue
+		}
+
+		time.Sleep(interval)
 	}
 }
 
@@ -2158,27 +2673,31 @@ func exchangeCodeForTokens(httpClient *http.Client, authCode, codeVerifier strin
 }
 
 // getRefreshTokenViaDeviceFlow 通过设备码流程获取 refresh_token
-func (br *BrowserRegister) getRefreshTokenViaDeviceFlow(email, password string) (string, string, error) {
+func (br *BrowserRegister) getRefreshTokenViaDeviceFlow(page *rod.Page, email, password string) (string, string, error) {
 	fmt.Println("\n步骤6: 通过设备码流程获取 Refresh Token...")
 
-	// 1. 请求设备码
+	if page == nil {
+		return "", "", fmt.Errorf("设备码流程缺少浏览器页面上下文")
+	}
+	if err := page.Navigate(codexDeviceVerificationURL); err != nil {
+		return "", "", fmt.Errorf("打开验证页面失败: %w", err)
+	}
+	time.Sleep(3 * time.Second)
+
 	fmt.Println("请求设备码...")
-	deviceResp, err := requestDeviceUserCode(br.httpClient.client)
+	deviceResp, err := requestDeviceUserCodeViaPage(page)
 	if err != nil {
 		return "", "", fmt.Errorf("请求设备码失败: %w", err)
 	}
 
 	fmt.Printf("设备码: %s\n", deviceResp.UserCode)
 	fmt.Printf("请访问: %s 并输入设备码\n", codexDeviceVerificationURL)
-
-	// 2. 打开浏览器进行设备码验证
-	page, err := br.browser.Page(proto.TargetCreateTarget{URL: codexDeviceVerificationURL})
-	if err != nil {
-		return "", "", fmt.Errorf("打开验证页面失败: %w", err)
+	pollInterval := codexDevicePollInterval
+	if strings.TrimSpace(deviceResp.Interval) != "" {
+		if sec, err := strconv.Atoi(strings.TrimSpace(deviceResp.Interval)); err == nil && sec > 0 {
+			pollInterval = time.Duration(sec) * time.Second
+		}
 	}
-	defer page.Close()
-
-	time.Sleep(3 * time.Second)
 
 	// 等待页面加载
 	time.Sleep(2 * time.Second)
@@ -2227,49 +2746,194 @@ func (br *BrowserRegister) getRefreshTokenViaDeviceFlow(email, password string) 
 	// 如果需要登录，使用已注册的账号登录
 	if strings.Contains(currentURL, "log-in") || strings.Contains(currentURL, "login") {
 		fmt.Println("需要登录...")
-		
-		// 等待邮箱输入框
+
+		// 等待页面加载
+		time.Sleep(3 * time.Second)
+
+		// 尝试多种选择器
 		emailInput, err := page.Timeout(10 * time.Second).Element("input[name='email']")
-		if err == nil {
-			emailInput.MustInput(email)
-			time.Sleep(500 * time.Millisecond)
+		if err != nil {
+			emailInput, err = page.Timeout(5 * time.Second).Element("input[type='email']")
+		}
+		if err != nil {
+			emailInput, err = page.Timeout(5 * time.Second).Element("input")
+		}
 
-			// 点击继续
-			continueBtn, _ := page.Element("button[type='submit']")
-			if continueBtn != nil {
-				continueBtn.MustClick()
-				time.Sleep(3 * time.Second)
-			}
+		if err != nil {
+			fmt.Printf("未找到邮箱输入框: %v\n", err)
+			// 打印页面上的所有 input
+			inputs, _ := page.Elements("input")
+			fmt.Printf("页面上的 input 元素数量: %d\n", len(inputs))
+			return "", "", nil
+		}
 
-			// 等待密码输入框
-			passInput, err := page.Timeout(10 * time.Second).Element("input[type='password']")
-			if err == nil {
-				passInput.MustInput(password)  // 使用注册时的密码
-				time.Sleep(500 * time.Millisecond)
+		fmt.Printf("找到邮箱输入框，输入邮箱: %s\n", email)
+		emailInput.MustInput(email)
+		time.Sleep(500 * time.Millisecond)
 
-				submitBtn, _ := page.Element("button[type='submit']")
-				if submitBtn != nil {
-					submitBtn.MustClick()
-					time.Sleep(3 * time.Second)
+		// 点击继续
+		continueBtn, err := page.Timeout(5 * time.Second).Element("button[type='submit']")
+		if err != nil {
+			continueBtn, err = page.Timeout(3 * time.Second).Element("button:contains('Continue')")
+		}
+		if err != nil {
+			continueBtn, err = page.Timeout(3 * time.Second).Element("button")
+		}
+
+		if continueBtn != nil {
+			fmt.Println("点击继续按钮...")
+			continueBtn.MustClick()
+			time.Sleep(3 * time.Second)
+		}
+
+		passSelectors := []string{"input[type='password']", "input[name='password']", "input[autocomplete='current-password']"}
+		var passInput *rod.Element
+		for s := 0; s < 3 && passInput == nil; s++ {
+			for _, sel := range passSelectors {
+				p, e := page.Timeout(5 * time.Second).Element(sel)
+				if e == nil && p != nil {
+					passInput = p
+					break
 				}
 			}
+			if passInput != nil {
+				break
+			}
+			continueBtn2, _ := page.Timeout(2 * time.Second).Element("button[type='submit']")
+			if continueBtn2 != nil {
+				continueBtn2.MustEval("() => this.click()")
+				time.Sleep(2 * time.Second)
+			}
+		}
+		if passInput == nil {
+			fmt.Printf("未找到密码输入框: context deadline exceeded\n")
+			return "", "", nil
+		}
+
+		fmt.Printf("找到密码输入框，输入密码\n")
+		passInput.MustClick()
+		time.Sleep(200 * time.Millisecond)
+
+		// 清空并重新输入密码
+		passInput.MustSelectAllText()
+		passInput.MustInput("")
+		time.Sleep(100 * time.Millisecond)
+		passInput.MustInput(password)
+		time.Sleep(500 * time.Millisecond)
+
+		// 验证密码已输入
+		val, _ := passInput.Eval("() => this.value")
+		fmt.Printf("密码输入值长度: %d\n", len(val.Value.String()))
+
+		submitBtn, err := page.Timeout(5 * time.Second).Element("button[type='submit']")
+		if err != nil {
+			submitBtn, _ = page.Timeout(3 * time.Second).Element("button")
+		}
+
+		// 打印按钮信息
+		if submitBtn != nil {
+			btnText, _ := submitBtn.Eval("() => this.innerText || this.textContent || ''")
+			disabled, _ := submitBtn.Eval("() => this.disabled")
+			fmt.Printf("按钮文本: %s, 禁用: %v\n", btnText.Value.String(), disabled.Value.Bool())
+		}
+
+		if submitBtn != nil {
+			fmt.Println("点击登录按钮...")
+
+			// 使用JS点击，更可靠
+			submitBtn.MustEval("() => this.click()")
+
+			time.Sleep(2 * time.Second)
+
+			// 检查是否有错误消息
+			errorMsg, _ := page.Eval("() => { const el = document.querySelector('[role=alert], .error, .Error'); return el ? el.innerText : ''; }")
+			if errorMsg.Value.String() != "" {
+				fmt.Printf("检测到错误消息: %s\n", errorMsg.Value.String())
+			}
+
+			// 等待页面跳转
+			for j := 0; j < 10; j++ {
+				time.Sleep(1 * time.Second)
+				newURL := page.MustInfo().URL
+				fmt.Printf("  [%ds] URL: %s\n", j+1, newURL)
+				if !strings.Contains(newURL, "log-in") && !strings.Contains(newURL, "login") {
+					fmt.Println("登录成功，已跳转!")
+					break
+				}
+			}
+			br.saveDebugScreenshot(page, "device_flow_after_login_submit")
+		} else {
+			fmt.Println("未找到提交按钮，尝试按Enter键")
+			page.MustEval("() => { const e = new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter'}); document.dispatchEvent(e); }")
+			time.Sleep(3 * time.Second)
+		}
+
+		fmt.Println("登录完成，等待页面跳转...")
+		time.Sleep(3 * time.Second)
+		postLoginURL := page.MustInfo().URL
+		if strings.Contains(postLoginURL, "log-in/password") {
+			fmt.Println("登录仍停留在密码页，继续轮询设备授权（可能需要额外验证/人工完成）")
 		}
 	}
 
 	// 6. 点击授权按钮（如果出现）
-	authorizeBtn, err := page.Timeout(5 * time.Second).Element("button:contains('Allow'), button:contains('Authorize'), button[type='submit']")
-	if err == nil {
-		authorizeBtn.MustClick()
-		fmt.Println("已授权")
-		time.Sleep(2 * time.Second)
-	}
+	// 等待更长时间让页面加载
+	time.Sleep(3 * time.Second)
 
-	// 7. 轮询获取授权码
+	// 检查当前 URL
+	currentURL = page.MustInfo().URL
+	fmt.Printf("登录后URL: %s\n", currentURL)
+
+	// 尝试点击授权按钮
+	for i := 0; i < 5; i++ {
+		// 检查URL是否已经完成授权
+		currentURL = page.MustInfo().URL
+		if strings.Contains(currentURL, "codex") || strings.Contains(currentURL, "device") {
+			fmt.Println("检测到设备码页面，可能已完成授权")
+			break
+		}
+
+		authorizeBtn, err := page.Timeout(3 * time.Second).Element("button[type='submit']")
+		if err == nil {
+			btnText := authorizeBtn.MustText()
+			fmt.Printf("找到按钮: %s\n", btnText)
+			if strings.Contains(strings.ToLower(btnText), "allow") ||
+				strings.Contains(strings.ToLower(btnText), "authorize") ||
+				strings.Contains(strings.ToLower(btnText), "continue") ||
+				strings.Contains(strings.ToLower(btnText), "confirm") {
+				authorizeBtn.MustClick()
+				fmt.Println("已点击授权按钮")
+				time.Sleep(3 * time.Second)
+			}
+		}
+
+		// 检查是否有其他按钮
+		buttons, _ := page.Elements("button")
+		for _, btn := range buttons {
+			text, _ := btn.Eval("() => this.innerText || this.textContent || ''")
+			btnText := strings.ToLower(text.Value.String())
+			if strings.Contains(btnText, "allow") ||
+				strings.Contains(btnText, "authorize") ||
+				strings.Contains(btnText, "continue") ||
+				strings.Contains(btnText, "confirm") {
+				btn.Eval("() => this.click()")
+				fmt.Printf("点击按钮: %s\n", btnText)
+				time.Sleep(2 * time.Second)
+			}
+		}
+
+		time.Sleep(1 * time.Second)
+	}
 	fmt.Println("轮询获取授权码...")
-	tokenResp, err := pollDeviceToken(br.httpClient.client, deviceResp.DeviceAuthID, deviceResp.UserCode)
+	tokenResp, err := pollDeviceTokenViaPage(page, deviceResp.DeviceAuthID, deviceResp.UserCode, pollInterval)
 	if err != nil {
-		fmt.Printf("轮询授权码失败: %v\n", err)
-		return "", "", nil  // 不返回错误，继续使用 session token
+		fmt.Printf("页面上下文轮询失败: %v\n", err)
+		fmt.Println("切换到 HTTP 轮询...")
+		tokenResp, err = pollDeviceToken(br.httpClient.client, deviceResp.DeviceAuthID, deviceResp.UserCode, pollInterval)
+		if err != nil {
+			fmt.Printf("HTTP 轮询失败: %v\n", err)
+			return "", "", nil
+		}
 	}
 
 	fmt.Println("获取到授权码，交换 tokens...")
@@ -2283,4 +2947,137 @@ func (br *BrowserRegister) getRefreshTokenViaDeviceFlow(email, password string) 
 
 	fmt.Println("成功获取 refresh_token!")
 	return oauthResp.RefreshToken, oauthResp.IDToken, nil
+}
+
+// ========================================
+// 设备指纹随机化
+// ========================================
+
+var userAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+}
+
+var screenResolutions = []struct {
+	width, height int
+}{
+	{1920, 1080},
+	{2560, 1440},
+	{1366, 768},
+	{1536, 864},
+	{1440, 900},
+	{1680, 1050},
+}
+
+var languages = []string{
+	"en-US",
+	"en-GB",
+	"en",
+}
+
+var timezones = []string{
+	"America/New_York",
+	"America/Los_Angeles",
+	"Europe/London",
+	"Europe/Paris",
+	"Asia/Tokyo",
+	"Australia/Sydney",
+}
+
+// DeviceFingerprint 设备指纹
+type DeviceFingerprint struct {
+	UserAgent     string
+	ScreenWidth   int
+	ScreenHeight  int
+	Language      string
+	Timezone      string
+	DeviceID      string
+	Platform      string
+	WebGLRenderer string
+}
+
+// generateDeviceFingerprint 生成随机设备指纹
+func generateDeviceFingerprint() *DeviceFingerprint {
+	fp := &DeviceFingerprint{
+		UserAgent: userAgents[rand.Intn(len(userAgents))],
+		Language:  languages[rand.Intn(len(languages))],
+		Timezone:  timezones[rand.Intn(len(timezones))],
+		Platform:  "Win32",
+		DeviceID:  fmt.Sprintf("%x", rand.Int63()),
+	}
+
+	// 随机屏幕分辨率
+	res := screenResolutions[rand.Intn(len(screenResolutions))]
+	fp.ScreenWidth = res.width
+	fp.ScreenHeight = res.height
+
+	// 随机 WebGL 渲染器
+	webglRenderers := []string{
+		"ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.1)",
+		"ANGLE (NVIDIA, NVIDIA GeForce GTX 1060, OpenGL 4.6)",
+		"ANGLE (NVIDIA, NVIDIA GeForce RTX 2070, OpenGL 4.6)",
+		"ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)",
+		"ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.1)",
+	}
+	fp.WebGLRenderer = webglRenderers[rand.Intn(len(webglRenderers))]
+
+	// 根据 User-Agent 设置平台
+	if strings.Contains(fp.UserAgent, "Windows") {
+		fp.Platform = "Win32"
+	} else if strings.Contains(fp.UserAgent, "Mac") {
+		fp.Platform = "MacIntel"
+	} else {
+		fp.Platform = "Linux x86_64"
+	}
+
+	return fp
+}
+
+// getStealthJS 生成隐蔽脚本（带设备指纹）
+func getStealthJS(fp *DeviceFingerprint) string {
+	return fmt.Sprintf(`() => {
+// 设备指纹伪装
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['%s', '%s']});
+Object.defineProperty(navigator, 'platform', {get: () => '%s'});
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => %d});
+Object.defineProperty(screen, 'width', {get: () => %d});
+Object.defineProperty(screen, 'height', {get: () => %d});
+Object.defineProperty(screen, 'availWidth', {get: () => %d});
+Object.defineProperty(screen, 'availHeight', {get: () => %d - 40});
+Object.defineProperty(screen, 'colorDepth', {get: () => 24});
+Object.defineProperty(screen, 'pixelDepth', {get: () => 24});
+
+// WebGL 指纹伪装
+const getParameter = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(parameter) {
+    if (parameter === 37445) return '%s';
+    if (parameter === 37446) return 'Google Inc. (NVIDIA)';
+    return getParameter.call(this, parameter);
+};
+
+// 时区伪装
+const originalDateTimeFormat = Intl.DateTimeFormat;
+Intl.DateTimeFormat = function(...args) {
+    if (args[1] && typeof args[1] === 'object') {
+        args[1].timeZone = args[1].timeZone || '%s';
+    }
+    return new originalDateTimeFormat(...args);
+};
+
+// 隐藏自动化特征
+window.chrome = {runtime: {}};
+Object.defineProperty(navigator, 'permissions', {
+    get: () => ({
+        query: () => Promise.resolve({state: 'granted'})
+    })
+});
+
+console.log('[Stealth] Device fingerprint applied');
+}`, fp.Language, fp.Language[:2], fp.Platform, 4+rand.Intn(5), fp.ScreenWidth, fp.ScreenHeight, fp.ScreenWidth, fp.ScreenHeight, fp.WebGLRenderer, fp.Timezone)
 }
