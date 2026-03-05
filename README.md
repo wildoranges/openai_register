@@ -5,12 +5,28 @@
 ## 目录
 
 - [项目概述](#项目概述)
+- [分支说明](#分支说明)
 - [快速开始](#快速开始)
 - [第一部分：OpenAI 账号注册机](#第一部分openai-账号注册机)
 - [第二部分：凭证格式转换](#第二部分凭证格式转换)
 - [第三部分：CLIProxyAPI 部署](#第三部分cliproxyapi-部署)
 - [第四部分：API 使用方法](#第四部分api-使用方法)
 - [常见问题](#常见问题)
+
+---
+
+## 分支说明
+
+本项目使用以下分支：
+
+| 分支 | 说明 |
+|------|------|
+| `no_refresh` | **稳定分支** - 仅获取 access_token，无 refresh_token 功能 |
+| `refresh` | 实验分支 - 包含 iOS OAuth refresh_token 代码（需要 preauth_cookie） |
+
+**注意**: `refresh_token` 获取功能目前受限：
+- Device Code Flow 需要 ChatGPT Plus 订阅
+- iOS OAuth Flow 需要 preauth_cookie（外部服务已不可用）
 
 ---
 
@@ -35,7 +51,7 @@
 openai_register/             # 本项目根目录
 ├── main.go                 # 主程序源码
 ├── openai-register         # 编译后的二进制
-├── config.json             # 配置文件
+├── config.json.example    # 配置文件模板（复制为 config.json 使用）
 ├── cmd/
 │   └── convert/
 │       └── main.go         # 转换工具源码
@@ -73,23 +89,30 @@ go build -o openai-register .
 go build -o convert_to_cliproxy ./cmd/convert
 ```
 
-### 3. 注册账号
+### 3. 配置文件
 
 ```bash
-# 编辑配置文件
-vim config.json
+# 复制配置模板
+cp config.json.example config.json
 
+# 编辑配置文件（填写代理地址等）
+vim config.json
+```
+
+### 4. 注册账号
+
+```bash
 # 运行注册（5 个账号）
 xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register 5
 ```
 
-### 4. 转换凭证
+### 5. 转换凭证
 
 ```bash
 ./convert_to_cliproxy
 ```
 
-### 5. 启动 API 代理
+### 6. 启动 API 代理
 
 ```bash
 # 下载并配置 CLIProxyAPI
@@ -111,7 +134,7 @@ EOF
 ./cliproxyapi -config config.yaml
 ```
 
-### 6. 测试 API
+### 7. 测试 API
 
 ```bash
 curl http://localhost:8317/v1/chat/completions \
@@ -141,6 +164,14 @@ curl http://localhost:8317/v1/chat/completions \
 - Linux 环境（推荐使用 xvfb-run 运行无头模式）
 
 ### 1.3 配置文件
+
+首先复制配置模板：
+
+```bash
+cp config.json.example config.json
+```
+
+然后编辑 `config.json`：
 
 配置文件 `config.json`：
 
