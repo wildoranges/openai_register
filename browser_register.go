@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,19 @@ type BrowserRegister struct {
 	config     *Config
 }
 
+type BrowserFingerprintProfile struct {
+	UserAgent           string
+	AcceptLanguage      string
+	NavigatorLanguages  []string
+	Platform            string
+	HardwareConcurrency int
+	DeviceMemory        int
+	WindowWidth         int
+	WindowHeight        int
+	ConnectionRTT       int
+	ConnectionDownlink  int
+}
+
 func NewBrowserRegister(config *Config) *BrowserRegister {
 	return &BrowserRegister{
 		httpClient: NewHTTPClientWithProxy(config.Proxy),
@@ -30,6 +44,68 @@ func NewBrowserRegister(config *Config) *BrowserRegister {
 
 type Point struct {
 	X, Y float64
+}
+
+func (br *BrowserRegister) randomFingerprintProfile() BrowserFingerprintProfile {
+	profiles := []BrowserFingerprintProfile{
+		{
+			UserAgent:           "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+			AcceptLanguage:      "en-US,en;q=0.9",
+			NavigatorLanguages:  []string{"en-US", "en"},
+			Platform:            "Linux x86_64",
+			HardwareConcurrency: 8,
+			DeviceMemory:        8,
+			WindowWidth:         1920,
+			WindowHeight:        1080,
+			ConnectionRTT:       40,
+			ConnectionDownlink:  12,
+		},
+		{
+			UserAgent:           "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+			AcceptLanguage:      "en-US,en;q=0.8",
+			NavigatorLanguages:  []string{"en-US", "en"},
+			Platform:            "Linux x86_64",
+			HardwareConcurrency: 4,
+			DeviceMemory:        4,
+			WindowWidth:         1366,
+			WindowHeight:        768,
+			ConnectionRTT:       55,
+			ConnectionDownlink:  8,
+		},
+		{
+			UserAgent:           "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+			AcceptLanguage:      "en-GB,en;q=0.9",
+			NavigatorLanguages:  []string{"en-GB", "en"},
+			Platform:            "Linux x86_64",
+			HardwareConcurrency: 16,
+			DeviceMemory:        16,
+			WindowWidth:         2560,
+			WindowHeight:        1440,
+			ConnectionRTT:       30,
+			ConnectionDownlink:  20,
+		},
+	}
+
+	base := profiles[rand.Intn(len(profiles))]
+	tinyJitter := rand.Intn(5) - 2
+	base.ConnectionRTT = maxInt(10, base.ConnectionRTT+tinyJitter)
+	base.ConnectionDownlink = maxInt(2, base.ConnectionDownlink+(rand.Intn(3)-1))
+	return base
+}
+
+func toJSStringArray(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, strconv.Quote(value))
+	}
+	return "[" + strings.Join(quoted, ",") + "]"
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (br *BrowserRegister) generateHumanTrack(startX, startY, endX, endY float64) []Point {
@@ -53,6 +129,8 @@ func (br *BrowserRegister) generateHumanTrack(startX, startY, endX, endY float64
 }
 
 func (br *BrowserRegister) Register(email, password string) (*AccountCredentials, error) {
+	fingerprint := br.randomFingerprintProfile()
+
 	path, found := launcher.LookPath()
 	if !found {
 		return nil, fmt.Errorf("未找到系统浏览器")
@@ -74,8 +152,9 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		Set("disable-software-rasterizer", "true").
 		Set("disable-web-security", "true").
 		Set("disable-features", "IsolateOrigins,site-per-process").
-		Set("window-size", "1920,1080").
-		Set("user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+		Set("window-size", fmt.Sprintf("%d,%d", fingerprint.WindowWidth, fingerprint.WindowHeight)).
+		Set("user-agent", fingerprint.UserAgent).
+		Set("lang", strings.Split(fingerprint.AcceptLanguage, ",")[0])
 
 	var localProxy *LocalProxyForwarder
 	if br.config.Proxy != "" {
@@ -110,10 +189,14 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	signupURL := "https://auth.openai.com/authorize?client_id=TdJIcbe16WoTHtN95nyywh5E4yOo6ItG&audience=https%3A%2F%2Fapi.openai.com%2Fv1&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fapi%2Fauth%2Fcallback%2Flogin-web&scope=openid+email+profile+offline_access+model.request+model.read+organization.read+organization.write&response_type=code&response_mode=query&state=state_is_immaterial&code_challenge=challenge_is_immaterial&code_challenge_method=S256&screen_hint=signup"
 
-	page := br.browser.MustPage(signupURL)
+	page, err := br.browser.Page(proto.TargetCreateTarget{URL: signupURL})
+	if err != nil {
+		return nil, fmt.Errorf("打开注册页面失败: %v", err)
+	}
 
+	_ = page.Timeout(60 * time.Second).WaitLoad()
 	fmt.Println("注入隐蔽脚本...")
-	page.MustEval(`() => {
+	stealthScript := fmt.Sprintf(`() => {
 		Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 		Object.defineProperty(navigator, 'plugins', {
 			get: () => {
@@ -124,10 +207,10 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 				];
 			}
 		});
-		Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en', 'zh-CN']});
-		Object.defineProperty(navigator, 'platform', {get: () => 'Linux x86_64'});
-		Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-		Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+		Object.defineProperty(navigator, 'languages', {get: () => %s});
+		Object.defineProperty(navigator, 'platform', {get: () => %s});
+		Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => %d});
+		Object.defineProperty(navigator, 'deviceMemory', {get: () => %d});
 		window.chrome = {
 			runtime: {connect: function() {}, sendMessage: function() {}},
 			loadTimes: function() {},
@@ -143,13 +226,21 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		Object.defineProperty(navigator, 'connection', {
 			get: () => ({
 				effectiveType: '4g',
-				rtt: 50,
-				downlink: 10,
+				rtt: %d,
+				downlink: %d,
 				saveData: false
 			})
 		});
 		console.log('Stealth mode activated');
-	}`)
+	}`,
+		toJSStringArray(fingerprint.NavigatorLanguages),
+		strconv.Quote(fingerprint.Platform),
+		fingerprint.HardwareConcurrency,
+		fingerprint.DeviceMemory,
+		fingerprint.ConnectionRTT,
+		fingerprint.ConnectionDownlink,
+	)
+	page.MustEval(stealthScript)
 
 	fmt.Println("等待页面加载...")
 	time.Sleep(5 * time.Second)
