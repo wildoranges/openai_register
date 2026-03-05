@@ -5,6 +5,7 @@
 ## 目录
 
 - [项目概述](#项目概述)
+- [快速开始](#快速开始)
 - [第一部分：OpenAI 账号注册机](#第一部分openai-账号注册机)
 - [第二部分：凭证格式转换](#第二部分凭证格式转换)
 - [第三部分：CLIProxyAPI 部署](#第三部分cliproxyapi-部署)
@@ -31,7 +32,7 @@
 ### 文件结构
 
 ```
-/openai_register/           # 本目录 - 注册机
+openai_register/             # 本项目根目录
 ├── main.go                 # 主程序源码
 ├── openai-register         # 编译后的二进制
 ├── config.json             # 配置文件
@@ -43,15 +44,78 @@
     ├── openai_tokens.txt         # 环境变量格式
     └── auth_*.json               # CodeX CLI 格式
 
-/CLIProxyAPI/               # API 代理目录
-├── cliproxyapi             # 编译后的二进制
-├── config.yaml             # 配置文件
-└── ...
-
 ~/.cli-proxy-api/           # CLIProxyAPI 凭证存储目录
 ├── codex-user1@example.com.json
 ├── codex-user2@example.com.json
 └── ...
+```
+
+---
+
+## 快速开始
+
+### 1. 克隆项目
+
+```bash
+git clone gitlab@222.195.92.204:wildoranges/openai_register.git
+cd openai_register
+```
+
+### 2. 构建工具
+
+```bash
+# 构建注册机
+go build -o openai-register .
+
+# 构建转换工具
+go build -o convert_to_cliproxy convert_to_cliproxy.go
+```
+
+### 3. 注册账号
+
+```bash
+# 编辑配置文件
+vim config.json
+
+# 运行注册（5 个账号）
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register 5
+```
+
+### 4. 转换凭证
+
+```bash
+./convert_to_cliproxy
+```
+
+### 5. 启动 API 代理
+
+```bash
+# 下载并配置 CLIProxyAPI
+git clone https://github.com/router-for-me/CLIProxyAPI.git
+cd CLIProxyAPI
+go build -o cliproxyapi ./cmd/server
+
+# 创建配置文件
+cat > config.yaml << 'EOF'
+host: ""
+port: 8317
+auth-dir: "~/.cli-proxy-api"
+api-keys:
+  - "sk-your-api-key"
+debug: false
+EOF
+
+# 启动服务
+./cliproxyapi -config config.yaml
+```
+
+### 6. 测试 API
+
+```bash
+curl http://localhost:8317/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-5", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 ---
@@ -84,7 +148,7 @@
   "headless": true,
   "timeout": 60,
   "debug": false,
-  "output_dir": "/openai_register/creds",
+  "output_dir": "creds",
   "count": 1
 }
 ```
@@ -95,17 +159,13 @@
 | `headless` | bool | 无头模式 | true |
 | `timeout` | int | 超时时间（秒） | 60 |
 | `debug` | bool | 调试模式 | false |
-| `output_dir` | string | 输出目录 | /openai_register/creds |
+| `output_dir` | string | 输出目录 | creds |
 | `count` | int | 注册账号数量 | 1 |
 
 ### 1.4 构建与运行
 
 ```bash
-# 进入目录
-cd /openai_register
-
 # 构建
-export PATH=$PATH:/usr/local/go/bin
 go build -o openai-register .
 
 # 运行（注册 N 个账号）
@@ -185,15 +245,12 @@ OpenAI 注册机输出的凭证格式与 CLIProxyAPI 要求的格式不同：
 | 字段名称 | `access_token` | `access_token` + `id_token` + `refresh_token` |
 | 元数据 | 基础信息 | 需要 `type`, `account_id`, `expired` 等 |
 
-### 2.2 使用转换脚本
+### 2.2 使用转换工具
 
 本目录包含 `convert_to_cliproxy` 工具，用于将凭证转换为 CLIProxyAPI 格式。
 
 ```bash
-# 进入目录
-cd /openai_register
-
-# 运行转换工具
+# 运行转换工具（使用默认路径）
 ./convert_to_cliproxy
 
 # 指定输入输出路径
@@ -276,7 +333,7 @@ mv cliproxyapi-linux-amd64 cliproxyapi
 
 ### 3.3 配置文件
 
-创建 `config.yaml`：
+在 CLIProxyAPI 目录下创建 `config.yaml`：
 
 ```yaml
 # 服务器配置
@@ -310,8 +367,8 @@ routing:
 # 确保凭证目录存在
 mkdir -p ~/.cli-proxy-api
 
-# 运行转换脚本（在 openai_register 目录下）
-cd /openai_register
+# 运行转换工具（在本项目目录下）
+cd openai_register
 ./convert_to_cliproxy
 
 # 验证凭证文件
@@ -321,6 +378,9 @@ ls -la ~/.cli-proxy-api/
 ### 3.5 启动服务
 
 ```bash
+# 在 CLIProxyAPI 目录下
+cd CLIProxyAPI
+
 # 前台运行
 ./cliproxyapi -config config.yaml
 
@@ -537,24 +597,44 @@ set -e
 
 echo "=== OpenAI 账号注册与 API 代理部署脚本 ==="
 
-# 1. 注册账号
-echo "[1/4] 注册 OpenAI 账号..."
-cd /openai_register
-export PATH=$PATH:/usr/local/go/bin
+# 1. 克隆项目
+echo "[1/5] 克隆项目..."
+git clone gitlab@222.195.92.204:wildoranges/openai_register.git
+cd openai_register
+
+# 2. 构建工具
+echo "[2/5] 构建工具..."
+go build -o openai-register .
+go build -o convert_to_cliproxy convert_to_cliproxy.go
+
+# 3. 注册账号
+echo "[3/5] 注册 OpenAI 账号..."
 xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register 5
 
-echo "[2/4] 转换凭证格式..."
+# 4. 转换凭证
+echo "[4/5] 转换凭证格式..."
 ./convert_to_cliproxy
 
-# 3. 启动 CLIProxyAPI
-echo "[3/4] 启动 API 代理服务..."
-cd /CLIProxyAPI
-pkill -f cliproxyapi 2>/dev/null || true
+# 5. 启动 CLIProxyAPI
+echo "[5/5] 启动 API 代理服务..."
+cd ..
+git clone https://github.com/router-for-me/CLIProxyAPI.git
+cd CLIProxyAPI
+go build -o cliproxyapi ./cmd/server
+
+cat > config.yaml << 'EOF'
+host: ""
+port: 8317
+auth-dir: "~/.cli-proxy-api"
+api-keys:
+  - "sk-your-api-key"
+debug: false
+EOF
+
 nohup ./cliproxyapi -config config.yaml > /tmp/cliproxyapi.log 2>&1 &
 sleep 3
 
-# 4. 验证
-echo "[4/4] 验证部署..."
+# 验证
 curl -s http://localhost:8317/v1/models -H "Authorization: Bearer YOUR_API_KEY" | python3 -m json.tool | head -20
 
 echo ""
