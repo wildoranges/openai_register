@@ -1,7 +1,7 @@
 {
   "proxy": "http://user:password@proxy-host:port",
   "headless": true,
-  "timeout": 60,
+  "timeout": 600,
   "debug": false,
   "output_dir": "creds",
   "count": 1
