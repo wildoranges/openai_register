@@ -13,6 +13,7 @@
 
 ## 目录
 
+- [环境准备](#环境准备)
 - [分支说明](#分支说明)
 - [快速开始](#快速开始)
 - [第一部分：OpenAI 账号注册机](#第一部分openai-账号注册机)
@@ -22,16 +23,67 @@
 
 ---
 
-## 分支说明
+## 环境准备
 
-| 分支 | 说明 |
-|------|------|
-| `no_refresh` | **稳定分支** - 仅获取 access_token，无 refresh_token 功能 |
-| `refresh` | 实验分支 - 包含 iOS OAuth refresh_token 代码（需要 preauth_cookie） |
+### 安装 Go
 
-**注意**: `refresh_token` 获取功能目前受限：
-- Device Code Flow 需要 ChatGPT Plus 订阅
-- iOS OAuth Flow 需要 preauth_cookie（外部服务已不可用）
+本项目需要 Go 1.24+，推荐使用 Go 1.26。
+
+#### 方法一：手动安装官方 tar.gz（推荐）
+
+```bash
+# 下载 Go 1.26 (amd64)
+wget https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+
+# 解压到 /usr/local或你指定的其他目录
+# 解压前请确保/usr/local目录下没有旧版本的 go 文件夹
+tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
+
+# 添加到 PATH (添加到 ~/.bashrc 或 ~/.zshrc)
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+source ~/.bashrc
+
+# 验证安装
+go version
+```
+
+#### 方法二：Go 官方多版本管理
+
+```bash
+# 先安装一个 Go 版本（作为引导）
+apt install -y golang-go  # 通常为较旧版本
+
+# 安装特定版本
+go install golang.org/dl/go1.26.0@latest
+go1.26.0 download
+
+# 使用
+go1.26.0 version
+
+# 设置为默认（可选）
+alias go=go1.26.0
+```
+
+> **提示**：方法一安装的是最新版本，方法二适合需要管理多个 Go 版本的开发者。
+
+### 安装 Chrome
+
+```bash
+# Debian/Ubuntu
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+dpkg -i google-chrome-stable_current_amd64.deb
+apt --fix-broken install
+```
+
+### 安装 xvfb（无头模式运行需要）
+
+```bash
+# Debian/Ubuntu
+apt install -y xvfb
+
+# CentOS/RHEL
+yum install -y xorg-x11-server-Xvfb
+```
 
 ---
 
