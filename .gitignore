@@ -36,3 +36,6 @@ CLIProxyAPI/
 
 # Config (contains sensitive proxy credentials)
 config.json
+
+# Agents
+AGENTS.md
