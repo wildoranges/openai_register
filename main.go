@@ -22,10 +22,13 @@ func main() {
 	}
 
 	simMode := false
+	oauthMode := false
 	count := config.Count
 	for _, arg := range os.Args[1:] {
 		if arg == "--sim" || arg == "-sim" {
 			simMode = true
+		} else if arg == "--oauth" || arg == "-oauth" {
+			oauthMode = true
 		} else if arg == "--head" || arg == "-head" {
 			config.Headless = false
 		} else if arg == "--debug" || arg == "-debug" {
@@ -39,6 +42,7 @@ func main() {
 		fmt.Printf("代理: %s\n", config.Proxy)
 	}
 	fmt.Printf("无头模式: %v\n", config.Headless)
+	fmt.Printf("OAuth模式: %v\n", oauthMode)
 	fmt.Printf("输出目录: %s\n", config.OutputDir)
 	fmt.Printf("注册数量: %d\n\n", count)
 
@@ -51,11 +55,13 @@ func main() {
 			ts := time.Now().Unix()
 			randStr := randomString(16)
 			credentials := &AccountCredentials{
-				Email:       fmt.Sprintf("test%d@openai-register.test", i+1),
-				Password:    GeneratePassword(),
-				AccessToken: fmt.Sprintf("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLWR1bW15IiwiZW1haWwiOiJ0ZXN0JWRAb3BlbmFpLXJlZ2lzdGVyLnRlc3QiLCJpYXQiOjE3MDk1Njc2MDAsImV4cCI6MTc0MDgxMTM5OH0.sim_sig_%d_%s", ts, randStr),
-				UserID:      fmt.Sprintf("user-test-%d-%d", i+1, ts),
-				CreatedAt:   time.Now(),
+				Email:        fmt.Sprintf("test%d@openai-register.test", i+1),
+				Password:     GeneratePassword(),
+				AccessToken:  fmt.Sprintf("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLWR1bW15IiwiZW1haWwiOiJ0ZXN0JWRAb3BlbmFpLXJlZ2lzdGVyLnRlc3QiLCJpYXQiOjE3MDk1Njc2MDAsImV4cCI6MTc0MDgxMTM5OH0.sim_sig_%d_%s", ts, randStr),
+				RefreshToken: fmt.Sprintf("v1|test_refresh_%d_%s", ts, randStr),
+				UserID:       fmt.Sprintf("user-test-%d-%d", i+1, ts),
+				ExpiresIn:    86400,
+				CreatedAt:    time.Now(),
 			}
 
 			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
@@ -67,9 +73,13 @@ func main() {
 			fmt.Printf("邮箱: %s\n", credentials.Email)
 			fmt.Printf("密码: %s\n", credentials.Password)
 			if len(credentials.AccessToken) > 50 {
-				fmt.Printf("Access Token: %s...\n", credentials.AccessToken[:50])
+				fmt.Printf("Access Token:  %s...\n", credentials.AccessToken[:50])
 			} else {
-				fmt.Printf("Access Token: %s\n", credentials.AccessToken)
+				fmt.Printf("Access Token:  %s\n", credentials.AccessToken)
+			}
+			if credentials.RefreshToken != "" {
+				maxLen := minInt(50, len(credentials.RefreshToken))
+				fmt.Printf("Refresh Token: %s...\n", credentials.RefreshToken[:maxLen])
 			}
 			successCount++
 		}
@@ -79,6 +89,7 @@ func main() {
 
 		httpClient := NewHTTPClientWithProxy(config.Proxy)
 		br := NewBrowserRegister(config)
+		brOAuth := NewBrowserRegisterOAuth(config)
 		successCount := 0
 		for i := 0; i < count; i++ {
 			fmt.Printf("\n========== 注册第 %d/%d 个账号 ==========\n", i+1, count)
@@ -93,9 +104,19 @@ func main() {
 			password := GeneratePassword()
 			fmt.Printf("生成密码: %s\n", password)
 
-			credentials, err := br.Register(email, password)
-			if err != nil {
-				fmt.Printf("注册失败: %v\n", err)
+			var credentials *AccountCredentials
+			var regErr error
+
+			if oauthMode {
+				// 使用 OAuth PKCE 模式 (获取 refresh_token)
+				credentials, regErr = brOAuth.RegisterWithOAuth(email, password)
+			} else {
+				// 使用传统模式 (仅 access_token)
+				credentials, regErr = br.Register(email, password)
+			}
+
+			if regErr != nil {
+				fmt.Printf("注册失败: %v\n", regErr)
 				continue
 			}
 
@@ -106,9 +127,12 @@ func main() {
 			fmt.Println("\n=== 注册成功 ===")
 			fmt.Printf("邮箱: %s\n", credentials.Email)
 			if len(credentials.AccessToken) > 50 {
-				fmt.Printf("Access Token: %s...\n", credentials.AccessToken[:50])
+				fmt.Printf("Access Token:  %s...\n", credentials.AccessToken[:50])
 			} else {
-				fmt.Printf("Access Token: %s\n", credentials.AccessToken)
+				fmt.Printf("Access Token:  %s\n", credentials.AccessToken)
+			}
+			if credentials.RefreshToken != "" && len(credentials.RefreshToken) > 50 {
+				fmt.Printf("Refresh Token: %s...\n", credentials.RefreshToken[:50])
 			}
 			fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
 			successCount++

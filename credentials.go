@@ -10,12 +10,15 @@ import (
 )
 
 type AccountCredentials struct {
-	Email       string    `json:"email"`
-	Password    string    `json:"password"`
-	AccessToken string    `json:"access_token"`
-	SessionID   string    `json:"session_id"`
-	UserID      string    `json:"user_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	Email        string    `json:"email"`
+	Password     string    `json:"password"`
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	IDToken      string    `json:"id_token,omitempty"`
+	SessionID    string    `json:"session_id"`
+	UserID       string    `json:"user_id"`
+	ExpiresIn    int64     `json:"expires_in,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) error {
@@ -52,11 +55,15 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		return err
 	}
 
-	codexAuth := map[string]interface{}{
-		"access_token": credentials.AccessToken,
-		"email":        credentials.Email,
-		"user_id":      credentials.UserID,
-		"created_at":   credentials.CreatedAt,
+codexAuth := map[string]interface{}{
+		"type":          "codex",
+		"access_token":  credentials.AccessToken,
+		"refresh_token": credentials.RefreshToken,
+		"id_token":       credentials.IDToken,
+		"email":         credentials.Email,
+		"user_id":       credentials.UserID,
+		"expired":       time.Now().Add(time.Duration(credentials.ExpiresIn) * time.Second).Format(time.RFC3339),
+		"created_at":    credentials.CreatedAt,
 	}
 	codexData, _ := json.MarshalIndent(codexAuth, "", "  ")
 	codexFile := filepath.Join(dataDir, fmt.Sprintf("auth_%s.json", credentials.Email[:strings.Index(credentials.Email, "@")]))
@@ -86,8 +93,8 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		existingTokens = strings.Join(newLines, "\n")
 	}
 
-	newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
-		credentials.Email, credentials.AccessToken, credentials.Email, credentials.Password)
+newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_REFRESH_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
+		credentials.Email, credentials.AccessToken, credentials.RefreshToken, credentials.Email, credentials.Password)
 	existingTokens += newRecord
 
 	if err := os.WriteFile(tokenFile, []byte(existingTokens), 0644); err != nil {
