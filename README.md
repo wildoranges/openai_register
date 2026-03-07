@@ -166,11 +166,22 @@ curl http://localhost:8317/v1/chat/completions \
 
 ## 第一部分：OpenAI 账号注册机
 
+### 关于 Refresh Token
+
+> ⚠️ **重要说明**
+>
+> 当前 `refresh_token` 暂时无法获取，因此获取的凭证只有 `access_token`。
+>
+> - `access_token` 有效期约为 **10 天**，过期后需要重新注册账号
+> - 建议定期批量注册新账号，保持可用凭证池
+> - 本项目默认分支为 `no_refresh`（稳定分支）
+>
+
 ### 1.1 系统要求
 
 - Go 1.24+
 - Chrome/Chromium 浏览器
-- 网络连接（建议使用代理并在config.json中配置）
+- 网络连接（建议使用代理并在 config.json 中配置）
 - Linux 环境（推荐使用 xvfb-run 运行无头模式）
 
 ### 1.2 配置文件
