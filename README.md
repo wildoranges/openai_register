@@ -259,6 +259,7 @@ crontab -e
 **说明：**
 - `config_cron.json` 是定时任务专用配置，不会覆盖 `config.json`
 - 日志保存在 `logs/` 目录，自动清理 7 天前的日志
+- 注册完成后自动转换为 CLIProxyAPI 格式，输出到 `~/.cli-proxy-api/`
 
 **命令行参数：**
 
