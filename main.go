@@ -140,8 +140,8 @@ if regErr != nil {
 			fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
 			successCount++
 
-			if i < count-1 {
-				waitTime := 30 + rand.Intn(30)
+if i < count-1 {
+				waitTime := 10 + rand.Intn(10)
 				fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
 				time.Sleep(time.Duration(waitTime) * time.Second)
 			}
