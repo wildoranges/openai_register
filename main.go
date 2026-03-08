@@ -115,11 +115,14 @@ func main() {
 				credentials, regErr = br.Register(email, password)
 			}
 
-			if regErr != nil {
-				fmt.Printf("注册失败: %v\n", regErr)
+if regErr != nil {
+				if regErr == ErrUnsupportedEmail {
+					fmt.Printf("❌ 邮箱不被 OpenAI 支持: %s，跳过该账号\n", email)
+				} else {
+					fmt.Printf("注册失败: %v\n", regErr)
+				}
 				continue
 			}
-
 			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
 				fmt.Printf("保存凭证失败: %v\n", err)
 			}

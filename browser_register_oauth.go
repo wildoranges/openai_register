@@ -269,7 +269,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "oauth_06_after_submit")
 
-	// 等待验证邮件
+// 等待验证邮件
 	fmt.Println("\n步骤5: 等待验证邮件...")
 	verifyLink, err := br.httpClient.CheckEmail(email)
 	if err != nil {
@@ -292,10 +292,12 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 
 		fmt.Println("\n步骤6: 处理个人信息...")
 		time.Sleep(5 * time.Second)
-		br.handlePostVerification(page)
+if err := br.handlePostVerification(page); err != nil {
+			return err
+		}
 	}
 
-	// 处理 consent 页面
+// 处理 consent 页面
 	br.handleConsentPage(page)
 
 	return nil

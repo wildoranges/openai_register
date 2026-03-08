@@ -16,6 +16,11 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
+// 定义错误类型
+var (
+	ErrUnsupportedEmail = fmt.Errorf("邮箱不被支持，跳过该账号")
+)
+
 type BrowserRegister struct {
 	browser    *rod.Browser
 	httpClient *HTTPClient
@@ -410,7 +415,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		} else {
 			page.MustNavigate(verifyLink)
 			time.Sleep(5 * time.Second)
-			br.handleCloudflare(page)
+br.handleCloudflare(page)
 		}
 		br.saveDebugScreenshot(page, "09_after_verification")
 
@@ -419,10 +424,13 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		br.handleCloudflare(page)
 
 		fmt.Println("\n处理后续步骤...")
-		br.handlePostVerification(page)
+		if err := br.handlePostVerification(page); err != nil {
+			return nil, err
+		}
+
+		fmt.Println("\n步骤5: 获取Access Token...")
 	}
 
-	fmt.Println("\n步骤5: 获取Access Token...")
 	accessToken, userID := br.getAccessToken(page)
 
 	if accessToken == "" {
@@ -643,7 +651,7 @@ func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
 	br.debugPageElements(page, "input")
 }
 
-func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
+func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 	step := 0
 	name := ""
 
@@ -655,7 +663,7 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
 
 		if strings.Contains(currentURL, "chatgpt.com") && !strings.Contains(currentURL, "auth") && !strings.Contains(currentURL, "log-in") && !strings.Contains(currentURL, "about-you") {
 			fmt.Println("已跳转到主页面!")
-			return
+			return nil
 		}
 
 		if strings.Contains(currentURL, "about-you") {
@@ -714,6 +722,15 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
 				}`, name, birthdate))
 				fmt.Printf("API 结果: %v\n", apiResult)
 
+				// 检查邮箱不支持错误
+				if !apiResult.Get("ok").Bool() {
+					bodyStr := apiResult.Get("body").String()
+					if strings.Contains(bodyStr, "unsupported_email") || strings.Contains(bodyStr, "not supported") {
+						fmt.Println("❌ 邮箱不被 OpenAI 支持，跳过该账号")
+						return ErrUnsupportedEmail
+					}
+				}
+
 				if apiResult.Get("ok").Bool() {
 					bodyStr := apiResult.Get("body").String()
 					var apiResp struct {
@@ -753,6 +770,8 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) {
 		br.clickElementByText(page, "button", "Agree")
 		br.clickElementByText(page, "button", "Accept")
 	}
+
+	return nil
 }
 
 func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
