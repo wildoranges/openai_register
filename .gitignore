@@ -5,7 +5,7 @@ openai-register
 debug_*.png
 
 # Credentials (sensitive)
-creds/
+creds*/
 
 # Go
 *.exe
@@ -35,7 +35,7 @@ convert_to_cliproxy
 CLIProxyAPI/
 
 # Config (contains sensitive proxy credentials)
-config.json
+config*.json
 
 # Agents
 AGENTS.md

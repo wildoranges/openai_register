@@ -168,15 +168,15 @@ curl http://localhost:8317/v1/chat/completions \
 
 ### 关于 Refresh Token
 
-> ⚠️ **重要说明**
+> ✅ **已支持**
 >
-> 当前 `refresh_token` 暂时无法获取，因此获取的凭证只有 `access_token`。
+> 本项目使用 OAuth PKCE 流程，可获取完整的 token set：
 >
-> - `access_token` 有效期约为 **10 天**，过期后需要重新注册账号
-> - 建议定期批量注册新账号，保持可用凭证池
-> - 本项目默认分支为 `no_refresh`（稳定分支）
+> - `access_token` - 访问令牌，有效期约 10 天
+> - `refresh_token` - 刷新令牌，可用于刷新 access_token
+> - `id_token` - 身份令牌
 >
-
+> **建议：** 定期批量注册新账号，保持可用凭证池
 ### 1.1 系统要求
 
 - Go 1.24+
@@ -218,14 +218,11 @@ cp config.json.example config.json
 # 构建
 go build -o openai-register .
 
-# 运行（注册 N 个账号）
-xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register N
-
-# 示例：注册 5 个账号
+# Linux 服务器（无 GUI）：需要 xvfb-run
 xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register 5
 
-# OAuth 模式（获取 refresh_token）
-xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register --oauth 5
+# Linux 桌面版：直接运行
+./openai-register 5
 
 # 显示浏览器窗口（调试用）
 ./openai-register --head 1
@@ -235,17 +232,45 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-registe
 
 # 使用配置文件中的数量
 ./openai-register
+
+# 指定配置文件路径
+./openai-register --config /path/to/config.json 5
 ```
+
+> **说明：** `xvfb-run` 为无 GUI 的 Linux 服务器提供虚拟 X server。Linux 桌面版可直接运行。
+
+### 1.4 定时任务
+
+项目提供了定时注册脚本 `register_cron.sh`，可配合 crontab 实现每日自动注册。
+
+**配置：**
+
+1. 修改 `config_cron.json` 设置注册数量等参数
+2. 安装 crontab：
+
+```bash
+# 编辑 crontab
+crontab -e
+
+# 添加以下内容（UTC 0:05 = 北京时间 8:05）
+5 0 * * * /path/to/register_cron.sh
+```
+
+**说明：**
+- `config_cron.json` 是定时任务专用配置，不会覆盖 `config.json`
+- 日志保存在 `logs/` 目录，自动清理 7 天前的日志
 
 **命令行参数：**
 
 | 参数 | 说明 |
 |------|------|
-| `--oauth` | OAuth 模式，获取 access_token + refresh_token |
+| `--config` | 指定配置文件路径，默认 `./config.json` |
 | `--head` | 显示浏览器窗口（调试用） |
 | `--sim` | 模拟模式，生成测试数据 |
 | `--debug` | 调试模式，保存截图 |
-注册完成后，凭证保存在 `creds/` 目录：
+
+> **说明：** 默认使用 OAuth PKCE 模式，获取 `access_token` + `refresh_token`
+注册完成后，凭证默认保存在 `creds/` 目录：
 
 | 文件 | 格式 | 说明 |
 |------|------|------|

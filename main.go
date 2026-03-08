@@ -14,7 +14,18 @@ func main() {
 	fmt.Println("====================================")
 	fmt.Println()
 
+	// Parse --config flag first
 	configPath := "./config.json"
+	for i := 0; i < len(os.Args); i++ {
+		if os.Args[i] == "--config" || os.Args[i] == "-config" {
+			if i+1 < len(os.Args) {
+				configPath = os.Args[i+1]
+			}
+		} else if len(os.Args[i]) > 8 && os.Args[i][:8] == "--config=" {
+			configPath = os.Args[i][8:]
+		}
+	}
+
 	config, err := LoadConfig(configPath)
 	if err != nil {
 		fmt.Printf("加载配置失败: %v，使用默认配置\n", err)
@@ -22,17 +33,26 @@ func main() {
 	}
 
 	simMode := false
-	oauthMode := false
 	count := config.Count
+	skipNext := false
 	for _, arg := range os.Args[1:] {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if arg == "--sim" || arg == "-sim" {
 			simMode = true
-		} else if arg == "--oauth" || arg == "-oauth" {
-			oauthMode = true
 		} else if arg == "--head" || arg == "-head" {
 			config.Headless = false
 		} else if arg == "--debug" || arg == "-debug" {
 			config.Debug = true
+		} else if arg == "--config" || arg == "-config" {
+			// Skip --config flag and its value
+			skipNext = true
+			continue
+		} else if len(arg) > 8 && arg[:8] == "--config=" {
+			// Skip --config=value
+			continue
 		} else {
 			fmt.Sscanf(arg, "%d", &count)
 		}
@@ -42,7 +62,6 @@ func main() {
 		fmt.Printf("代理: %s\n", config.Proxy)
 	}
 	fmt.Printf("无头模式: %v\n", config.Headless)
-	fmt.Printf("OAuth模式: %v\n", oauthMode)
 	fmt.Printf("输出目录: %s\n", config.OutputDir)
 	fmt.Printf("注册数量: %d\n\n", count)
 
@@ -88,7 +107,6 @@ func main() {
 		fmt.Printf("将注册 %d 个账号\n\n", count)
 
 		httpClient := NewHTTPClientWithProxy(config.Proxy)
-		br := NewBrowserRegister(config)
 		brOAuth := NewBrowserRegisterOAuth(config)
 		successCount := 0
 		for i := 0; i < count; i++ {
@@ -104,18 +122,10 @@ func main() {
 			password := GeneratePassword()
 			fmt.Printf("生成密码: %s\n", password)
 
-			var credentials *AccountCredentials
-			var regErr error
+			// 使用 OAuth PKCE 模式获取 refresh_token
+			credentials, regErr := brOAuth.RegisterWithOAuth(email, password)
 
-			if oauthMode {
-				// 使用 OAuth PKCE 模式 (获取 refresh_token)
-				credentials, regErr = brOAuth.RegisterWithOAuth(email, password)
-			} else {
-				// 使用传统模式 (仅 access_token)
-				credentials, regErr = br.Register(email, password)
-			}
-
-if regErr != nil {
+			if regErr != nil {
 				if regErr == ErrUnsupportedEmail {
 					fmt.Printf("❌ 邮箱不被 OpenAI 支持: %s，跳过该账号\n", email)
 				} else {
@@ -140,7 +150,7 @@ if regErr != nil {
 			fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
 			successCount++
 
-if i < count-1 {
+			if i < count-1 {
 				waitTime := 10 + rand.Intn(10)
 				fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
 				time.Sleep(time.Duration(waitTime) * time.Second)
