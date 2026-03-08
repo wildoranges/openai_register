@@ -214,8 +214,6 @@ cp config.json.example config.json
 | `output_dir` | string | 输出目录 | creds |
 | `count` | int | 注册账号数量 | 1 |
 
-### 1.3 构建与运行
-
 ```bash
 # 构建
 go build -o openai-register .
@@ -226,25 +224,53 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-registe
 # 示例：注册 5 个账号
 xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register 5
 
+# OAuth 模式（获取 refresh_token）
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register --oauth 5
+
 # 显示浏览器窗口（调试用）
 ./openai-register --head 1
+
+# 模拟模式（生成测试数据）
+./openai-register --sim 5
 
 # 使用配置文件中的数量
 ./openai-register
 ```
 
-### 1.4 输出文件
+**命令行参数：**
 
+| 参数 | 说明 |
+|------|------|
+| `--oauth` | OAuth 模式，获取 access_token + refresh_token |
+| `--head` | 显示浏览器窗口（调试用） |
+| `--sim` | 模拟模式，生成测试数据 |
+| `--debug` | 调试模式，保存截图 |
 注册完成后，凭证保存在 `creds/` 目录：
 
 | 文件 | 格式 | 说明 |
 |------|------|------|
-| `openai_credentials.json` | JSON | 完整凭证数组，包含 email、password、access_token 等 |
+| `openai_credentials.json` | JSON | 完整凭证数组，包含 email、password、access_token、refresh_token |
 | `openai_tokens.txt` | TEXT | 环境变量格式，每行一个 `OPENAI_ACCESS_TOKEN=xxx` |
 | `auth_*.json` | JSON | CodeX CLI 格式，每个账号一个文件 |
 
-### 1.5 工作流程
+### 1.5 临时邮箱服务
 
+本项目使用 GPTMail (chatgpt.org.uk) 作为临时邮箱服务：
+
+| 项目 | 说明 |
+|------|------|
+| **API Key** | `YOUR_API_KEY`（公共测试 Key） |
+| **每日配额** | 20 万次（全球共享） |
+| **配额重置** | UTC 0:00（北京时间上午 8:00） |
+
+**注意事项：**
+- 公共 API Key `YOUR_API_KEY` 配额全球共享，可能用完
+- 配额用完时返回 `Daily quota exceeded`
+- 可购买专属 API Key：[LDC Store](https://shop.chatgpt.org.uk/buy/prod_1768420938389)
+
+### 1.6 工作流程
+
+**普通模式：**
 ```
 1. 获取临时邮箱地址（chatgpt.org.uk API）
         ↓
@@ -258,13 +284,35 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-registe
         ↓
 6. 等待并解析 OTP 验证码邮件
         ↓
-7. 处理 "about-you" 页面（通过 API 调用）
+7. 处理 "about-you" 页面
         ↓
 8. 完成注册，提取 access_token
         ↓
 9. 保存凭证到文件
 ```
 
+**OAuth 模式（`--oauth`）：**
+```
+1. 获取临时邮箱地址（chatgpt.org.uk API）
+        ↓
+2. 启动本地 OAuth 回调服务器（端口 1455）
+        ↓
+3. 生成 PKCE 代码（code_verifier + code_challenge）
+        ↓
+4. 访问 OpenAI OAuth 授权页面
+        ↓
+5. 通过 Cloudflare 验证
+        ↓
+6. 填写邮箱、密码，输入 OTP
+        ↓
+7. 同意 OAuth 授权（consent 页面）
+        ↓
+8. 本地回调服务器收到 authorization code
+        ↓
+9. 用 code 兑换 access_token + refresh_token
+        ↓
+10. 保存凭证到文件
+```
 ---
 
 ## 第二部分：凭证格式转换
