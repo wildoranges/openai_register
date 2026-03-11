@@ -39,3 +39,9 @@ config*.json
 
 # Agents
 AGENTS.md
+
+# Binary executables
+cleanup_no_refresh
+merge_credentials
+convert_to_cliproxy
+openai-register

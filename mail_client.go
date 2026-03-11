@@ -22,9 +22,10 @@ type TempMailProvider struct {
 
 // ServiceStatus 服务状态跟踪
 type ServiceStatus struct {
-	FailCount  int
-	LastFail   time.Time
-	IsDisabled bool
+	FailCount      int
+	LastFail       time.Time
+	PriorityAdjust int // 优先级调整值，越大优先级越低
+	LastAdjustTime time.Time
 }
 
 // HTTPClient HTTP客户端
@@ -86,25 +87,18 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 	}
 }
 
-// isServiceAvailable 检查服务是否可用
-func (c *HTTPClient) isServiceAvailable(name string) bool {
+// getServicePriority 获取服务的动态优先级（原始优先级 + 调整值）
+func (c *HTTPClient) getServicePriority(name string, originalPriority int) int {
 	c.statusMutex.RLock()
 	defer c.statusMutex.RUnlock()
 
-	status, exists := c.serviceStatus[name]
-	if !exists {
-		return true
+	if status, exists := c.serviceStatus[name]; exists {
+		return originalPriority + status.PriorityAdjust
 	}
-
-	// 如果服务被禁用超过5分钟，重新尝试
-	if status.IsDisabled && time.Since(status.LastFail) > 5*time.Minute {
-		return true
-	}
-
-	return !status.IsDisabled
+	return originalPriority
 }
 
-// markServiceFailed 标记服务失败
+// markServiceFailed 标记服务失败，连续3次失败后降低优先级
 func (c *HTTPClient) markServiceFailed(name string) {
 	c.statusMutex.Lock()
 	defer c.statusMutex.Unlock()
@@ -118,21 +112,26 @@ func (c *HTTPClient) markServiceFailed(name string) {
 	status.FailCount++
 	status.LastFail = time.Now()
 
-	// 连续失败3次则禁用
-	if status.FailCount >= 3 {
-		status.IsDisabled = true
-		fmt.Printf("[警告] 服务 %s 已被临时禁用（连续失败 %d 次）\n", name, status.FailCount)
+	// 连续失败3次则降低优先级（增加优先级调整值）
+	if status.FailCount >= 3 && status.PriorityAdjust < 10 {
+		status.PriorityAdjust += 1
+		status.LastAdjustTime = time.Now()
+		fmt.Printf("[调整] 服务 %s 连续失败 %d 次，优先级降低（当前调整值: +%d）\n", name, status.FailCount, status.PriorityAdjust)
 	}
 }
 
-// markServiceSuccess 标记服务成功
+// markServiceSuccess 标记服务成功，恢复优先级
 func (c *HTTPClient) markServiceSuccess(name string) {
 	c.statusMutex.Lock()
 	defer c.statusMutex.Unlock()
 
 	if status, exists := c.serviceStatus[name]; exists {
 		status.FailCount = 0
-		status.IsDisabled = false
+		// 成功后恢复优先级
+		if status.PriorityAdjust > 0 {
+			status.PriorityAdjust = 0
+			fmt.Printf("[恢复] 服务 %s 优先级已恢复\n", name)
+		}
 	}
 }
 
@@ -142,21 +141,41 @@ func (c *HTTPClient) SetDefaultHeaders(req *http.Request) {
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 }
 
-// GetTempEmail 获取临时邮箱（轮询所有服务）
+// GetTempEmail 获取临时邮箱（按动态优先级轮询）
 func (c *HTTPClient) GetTempEmail() (string, error) {
 	fmt.Println("\n📧 正在获取临时邮箱...")
 
-	// 按优先级遍历所有服务
-	for _, provider := range tempMailProviders {
-		if !c.isServiceAvailable(provider.Name) {
-			fmt.Printf("[%s] 服务已禁用，跳过\n", provider.Name)
-			continue
+	// 创建服务列表副本并按动态优先级排序
+	type providerWithPriority struct {
+		provider TempMailProvider
+		priority int
+	}
+	var sortedProviders []providerWithPriority
+	for _, p := range tempMailProviders {
+		sortedProviders = append(sortedProviders, providerWithPriority{
+			provider: p,
+			priority: c.getServicePriority(p.Name, p.Priority),
+		})
+	}
+
+	// 按优先级排序（数字越小优先级越高）
+	for i := 0; i < len(sortedProviders); i++ {
+		for j := i + 1; j < len(sortedProviders); j++ {
+			if sortedProviders[j].priority < sortedProviders[i].priority {
+				sortedProviders[i], sortedProviders[j] = sortedProviders[j], sortedProviders[i]
+			}
 		}
+	}
+
+	// 按排序后的顺序遍历所有服务
+	for _, pp := range sortedProviders {
+		provider := pp.provider
+		fmt.Printf("[%s] 尝试获取邮箱（优先级: %d）\n", provider.Name, pp.priority)
 
 		var email string
 		var err error
 
-switch provider.Name {
+		switch provider.Name {
 		case "Mail.tm":
 			email, err = c.getMailTmEmail(provider)
 		default:
@@ -315,10 +334,6 @@ for i := 0; i < maxRetries; i++ {
 
 		// 尝试通用服务
 		for _, provider := range tempMailProviders {
-			if !c.isServiceAvailable(provider.Name) {
-				continue
-			}
-
 			if provider.Name == "Mail.tm" {
 				continue // 已经尝试过
 			}

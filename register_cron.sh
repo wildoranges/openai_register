@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # OpenAI 账号定时注册脚本
-# 每天北京时间 8:05 执行
+# 每天北京时间 8:05 和 20:05 执行
 
 # 获取脚本所在目录（不硬编码路径）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,7 @@ mkdir -p $LOG_DIR
 LOG_FILE="$LOG_DIR/register_$(date +%Y%m%d_%H%M%S).log"
 
 # 凭证输出目录（与 config_cron.json 中的 output_dir 一致）
-CREDS_DIR="$SCRIPT_DIR/creds_refresh"
+CREDS_DIR="$SCRIPT_DIR/creds"
 CLI_PROXY_DIR="$HOME/.cli-proxy-api"
 
 echo "========================================" | tee -a $LOG_FILE
@@ -26,9 +26,10 @@ echo "开始定时注册任务: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a $LOG_FILE
 echo "========================================" | tee -a $LOG_FILE
 
 # 使用专用配置文件运行注册
-# config_cron.json 已配置 count: 50
+# config_cron.json 已配置 count: 100
 # xvfb-run 为 Linux 服务器提供虚拟 X server
-xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 3600 ./openai-register --config ./config_cron.json >> $LOG_FILE 2>&1
+# timeout 4小时 (14400秒)
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 14400 ./openai-register --config ./config_cron.json >> $LOG_FILE 2>&1
 
 echo "" | tee -a $LOG_FILE
 echo "========================================" | tee -a $LOG_FILE

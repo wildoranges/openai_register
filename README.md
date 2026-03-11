@@ -97,15 +97,19 @@ cd openai_register
 ```
 
 ### 2. 构建工具
-
 ```bash
 # 构建注册机
 go build -o openai-register .
 
 # 构建凭证格式转换工具
 go build -o convert_to_cliproxy ./cmd/convert
-```
 
+# 构建凭证清理工具
+go build -o cleanup_no_refresh ./cmd/cleanup_no_refresh
+
+# 构建凭证合并工具
+go build -o merge_credentials ./cmd/merge_credentials
+```
 ### 3. 配置文件
 
 ```bash
@@ -252,11 +256,16 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-registe
 # 编辑 crontab
 crontab -e
 
-# 添加以下内容（UTC 0:05 = 北京时间 8:05）
-5 0 * * * /path/to/register_cron.sh
+# 添加以下内容（每天北京时间 8:05 和 20:05 执行）
+# 系统时区: Asia/Shanghai (UTC+8)
+5 8,20 * * * /path/to/register_cron.sh
 ```
 
 **说明：**
+- `config_cron.json` 是定时任务专用配置，不会覆盖 `config.json`
+- 日志保存在 `logs/` 目录，自动清理 7 天前的日志
+- 注册完成后自动转换为 CLIProxyAPI 格式，输出到 `~/.cli-proxy-api/`
+- 自动清理无 `refresh_token` 的凭证
 - `config_cron.json` 是定时任务专用配置，不会覆盖 `config.json`
 - 日志保存在 `logs/` 目录，自动清理 7 天前的日志
 - 注册完成后自动转换为 CLIProxyAPI 格式，输出到 `~/.cli-proxy-api/`
@@ -389,6 +398,37 @@ go build -o convert_to_cliproxy ./cmd/convert
   "expired": "2026-03-15T00:09:35"
 }
 ```
+
+### 2.4 清理无刷新令牌的凭证
+
+旧版本凭证可能没有 `refresh_token`，无法自动刷新。使用清理工具删除这些凭证：
+
+```bash
+# 预览模式（不删除，只显示）
+./cleanup_no_refresh creds creds_refresh
+
+# 执行删除
+./cleanup_no_refresh creds creds_refresh --execute
+```
+
+### 2.5 合并多个目录的凭证
+
+将多个目录的凭证合并到一个目录，自动根据 email 去重：
+
+```bash
+# 合并 creds 和 creds_refresh 到 creds_merged
+./merge_credentials creds_merged creds creds_refresh
+
+# 查看帮助
+./merge_credentials
+```
+
+**说明：**
+- 读取所有源目录的 `auth_*.json` 和 `openai_credentials.json`
+- 根据 `email` 字段去重
+- 输出到目标目录的 `openai_credentials.json` 和 `auth_*.json`
+
+---
 
 ---
 
