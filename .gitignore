@@ -45,3 +45,8 @@ cleanup_no_refresh
 merge_credentials
 convert_to_cliproxy
 openai-register
+logs/
+Logs/
+
+# External repos
+openai-auto-register/
