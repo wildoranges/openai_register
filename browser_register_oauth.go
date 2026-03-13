@@ -38,7 +38,8 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	}
 
 	// 启动 OAuth 回调服务器
-	if err := br.oauthServer.Start(); err != nil {
+	redirectURI, err := br.oauthServer.Start()
+	if err != nil {
 		return nil, fmt.Errorf("启动 OAuth 回调服务器失败: %v", err)
 	}
 	defer br.oauthServer.Stop()
@@ -47,7 +48,7 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	br.oauthServer.Reset()
 
 	// 构建授权 URL
-	authURL := BuildOAuthAuthURL(pkce)
+	authURL := BuildOAuthAuthURL(pkce, redirectURI)
 
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println("开始 OAuth PKCE 注册流程")
@@ -145,7 +146,7 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	fmt.Println("State 校验通过")
 
 	// 用 authorization code 兑换 token
-	tokenResp, err := br.exchangeCodeForTokens(result.Code, pkce.CodeVerifier)
+	tokenResp, err := br.exchangeCodeForTokens(result.Code, pkce.CodeVerifier, redirectURI)
 	if err != nil {
 		return nil, fmt.Errorf("Token 兑换失败: %v", err)
 	}
@@ -332,12 +333,12 @@ func (br *BrowserRegisterOAuth) handleConsentPage(page *rod.Page) {
 }
 
 // exchangeCodeForTokens 用 authorization code 兑换 token
-func (br *BrowserRegisterOAuth) exchangeCodeForTokens(code, codeVerifier string) (*TokenResponse, error) {
+func (br *BrowserRegisterOAuth) exchangeCodeForTokens(code, codeVerifier, redirectURI string) (*TokenResponse, error) {
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {OAuthClientID},
 		"code":          {code},
-		"redirect_uri":  {OAuthRedirectURI},
+		"redirect_uri":  {redirectURI},
 		"code_verifier": {codeVerifier},
 	}
 

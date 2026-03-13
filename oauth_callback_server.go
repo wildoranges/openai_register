@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -15,6 +17,7 @@ type OAuthCallbackServer struct {
 	resultCh chan *OAuthResult
 	mu       sync.Mutex
 	started  bool
+	port     int
 }
 
 // NewOAuthCallbackServer 创建新的 OAuth 回调服务器
@@ -25,35 +28,58 @@ func NewOAuthCallbackServer() *OAuthCallbackServer {
 }
 
 // Start 启动 OAuth 回调服务器
-func (s *OAuthCallbackServer) Start() error {
+func (s *OAuthCallbackServer) Start() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.started {
-		return nil
+		return BuildOAuthRedirectURI(s.port), nil
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/callback", s.handleCallback)
 	mux.HandleFunc("/success", s.handleSuccess)
 
+	preferredAddr := fmt.Sprintf("127.0.0.1:%d", OAuthCallbackPort)
+	listener, err := net.Listen("tcp", preferredAddr)
+	if err != nil {
+		fmt.Printf("⚠️ OAuth 回调端口 %d 不可用: %v，自动尝试可用端口...\n", OAuthCallbackPort, err)
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return "", fmt.Errorf("启动 OAuth 回调服务器失败: %v", err)
+		}
+	}
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		listener.Close()
+		return "", fmt.Errorf("解析 OAuth 回调端口失败: %v", err)
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		listener.Close()
+		return "", fmt.Errorf("解析 OAuth 回调端口失败: %v", err)
+	}
+
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", OAuthCallbackPort),
 		Handler: mux,
 	}
 
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("OAuth 回调服务器错误: %v\n", err)
 		}
 	}()
 
+	s.port = port
 	s.started = true
-	fmt.Printf("🌐 OAuth 回调服务器已启动: http://127.0.0.1:%d/auth/callback\n", OAuthCallbackPort)
+	redirectURI := BuildOAuthRedirectURI(s.port)
+	fmt.Printf("🌐 OAuth 回调服务器已启动: %s\n", redirectURI)
 
 	// 等待服务器启动
 	time.Sleep(100 * time.Millisecond)
-	return nil
+	return redirectURI, nil
 }
 
 // Stop 停止 OAuth 回调服务器
@@ -72,6 +98,7 @@ func (s *OAuthCallbackServer) Stop() error {
 		return fmt.Errorf("关闭 OAuth 回调服务器失败: %v", err)
 	}
 
+	s.port = 0
 	s.started = false
 	fmt.Println("🔒 OAuth 回调服务器已关闭")
 	return nil

@@ -21,6 +21,15 @@ LOG_FILE="$LOG_DIR/register_$(date +%Y%m%d_%H%M%S).log"
 CREDS_DIR="$SCRIPT_DIR/creds"
 CLI_PROXY_DIR="$HOME/.cli-proxy-api"
 
+# 确保每次运行时 CREDS_DIR 为空：若已存在则重命名为时间戳目录
+if [ -d "$CREDS_DIR" ]; then
+    TS="$(date +%Y%m%d_%H%M%S)"
+    CREDS_BACKUP_DIR="${CREDS_DIR}_${TS}"
+    echo "检测到已存在凭证目录，重命名: $CREDS_DIR -> $CREDS_BACKUP_DIR" | tee -a $LOG_FILE
+    mv "$CREDS_DIR" "$CREDS_BACKUP_DIR"
+fi
+mkdir -p "$CREDS_DIR"
+
 echo "========================================" | tee -a $LOG_FILE
 echo "开始定时注册任务: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a $LOG_FILE
 echo "========================================" | tee -a $LOG_FILE

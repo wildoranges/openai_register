@@ -14,7 +14,6 @@ const (
 	OAuthAuthURL      = "https://auth.openai.com/oauth/authorize"
 	OAuthTokenURL     = "https://auth.openai.com/oauth/token"
 	OAuthCallbackPort = 1455
-	OAuthRedirectURI  = "http://localhost:1455/auth/callback"
 )
 
 // PKCECodes 存储 PKCE 相关的代码
@@ -58,13 +57,18 @@ func base64URLEncode(data []byte) string {
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data)
 }
 
+// BuildOAuthRedirectURI 构建 OAuth 回调地址
+func BuildOAuthRedirectURI(port int) string {
+	return fmt.Sprintf("http://localhost:%d/auth/callback", port)
+}
+
 // BuildOAuthAuthURL 构建 OAuth 授权 URL
-func BuildOAuthAuthURL(pkce *PKCECodes) string {
+func BuildOAuthAuthURL(pkce *PKCECodes, redirectURI string) string {
 	return fmt.Sprintf(
 		"%s?client_id=%s&response_type=code&redirect_uri=%s&scope=%s&state=%s&code_challenge=%s&code_challenge_method=S256&prompt=login&id_token_add_organizations=true&codex_cli_simplified_flow=true",
 		OAuthAuthURL,
 		OAuthClientID,
-		OAuthRedirectURI,
+		redirectURI,
 		"openid email profile offline_access",
 		pkce.State,
 		pkce.CodeChallenge,
