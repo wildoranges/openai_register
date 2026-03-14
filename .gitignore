@@ -50,3 +50,6 @@ Logs/
 
 # External repos
 openai-auto-register/
+
+# Binary executables (root level only)
+/check_tokens
