@@ -131,6 +131,12 @@ func main() {
 				} else {
 					fmt.Printf("注册失败: %v\n", regErr)
 				}
+				// 失败后也等待，避免频繁请求触发限制
+				if i < count-1 {
+					waitTime := 10 + rand.Intn(10)
+					fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+					time.Sleep(time.Duration(waitTime) * time.Second)
+				}
 				continue
 			}
 			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
