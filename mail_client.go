@@ -248,9 +248,10 @@ func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
 
 	domain := domainsResp.Data[0].Domain
 	address := fmt.Sprintf("%s@%s", randomString(10), domain)
+	password := "TempPass" + randomString(8) + "!"
 
 	// 创建账户
-	createReq := map[string]string{"address": address, "password": "TempPass123!"}
+	createReq := map[string]string{"address": address, "password": password}
 	createBody, _ := json.Marshal(createReq)
 
 	req, _ := http.NewRequest("POST", "https://api.mail.tm/accounts", strings.NewReader(string(createBody)))
@@ -266,7 +267,32 @@ func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
 		return "", fmt.Errorf("创建账户失败: %d", resp2.StatusCode)
 	}
 
+	// 保存账户信息用于后续邮件检查
+	currentMailService = &MailService{
+		Name:   "Mail.tm",
+		Email:  address,
+		Domain: domain,
+	}
+	c.setMailTmPassword(password)
+
+	fmt.Printf("[Mail.tm] 已创建账户: %s\n", address)
 	return address, nil
+}
+
+// mailTmPassword 存储 Mail.tm 密码
+var mailTmPassword string
+var mailTmPasswordMutex sync.RWMutex
+
+func (c *HTTPClient) setMailTmPassword(password string) {
+	mailTmPasswordMutex.Lock()
+	defer mailTmPasswordMutex.Unlock()
+	mailTmPassword = password
+}
+
+func (c *HTTPClient) getMailTmPassword() string {
+	mailTmPasswordMutex.RLock()
+	defer mailTmPasswordMutex.RUnlock()
+	return mailTmPassword
 }
 
 // getGenericEmail 通用邮箱获取方法
@@ -328,7 +354,7 @@ var currentMailService *MailService
 
 // CheckEmail 检查邮件（轮询所有服务）
 func (c *HTTPClient) CheckEmail(email string) (string, error) {
-	maxRetries := 60
+	maxRetries := 30
 
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
@@ -338,8 +364,7 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 	fmt.Printf("📬 检查邮箱: %s (login=%s, domain=%s)\n", email, login, domain)
 
 	for i := 0; i < maxRetries; i++ {
-		// 尝试 Mail.tm
-		if strings.Contains(domain, "mail.tm") || strings.Contains(domain, "dollicons") {
+		if currentMailService != nil && currentMailService.Name == "Mail.tm" {
 			if link := c.checkMailTm(); link != "" {
 				return link, nil
 			}
@@ -379,7 +404,105 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 
 // checkMailTm 检查 Mail.tm 邮件
 func (c *HTTPClient) checkMailTm() string {
-	return "" // Mail.tm 需要token，暂时跳过
+	if currentMailService == nil || currentMailService.Email == "" {
+		return ""
+	}
+
+	password := c.getMailTmPassword()
+	if password == "" {
+		return ""
+	}
+
+	token := c.getMailTmToken(currentMailService.Email, password)
+	if token == "" {
+		return ""
+	}
+
+	messages := c.getMailTmMessages(token)
+	for _, msg := range messages {
+		if link := c.checkMailTmMessage(token, msg.ID); link != "" {
+			return link
+		}
+	}
+	return ""
+}
+
+func (c *HTTPClient) getMailTmToken(email, password string) string {
+	reqBody := map[string]string{"address": email, "password": password}
+	body, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", "https://api.mail.tm/token", strings.NewReader(string(body)))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	if json.Unmarshal(respBody, &result); result.Token != "" {
+		return result.Token
+	}
+	return ""
+}
+
+func (c *HTTPClient) getMailTmMessages(token string) []struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+} {
+	req, err := http.NewRequest("GET", "https://api.mail.tm/messages", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var messages []struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(body, &messages)
+	return messages
+}
+
+func (c *HTTPClient) checkMailTmMessage(token, messageID string) string {
+	req, err := http.NewRequest("GET", "https://api.mail.tm/messages/"+messageID, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var msg struct {
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+		HTML    string `json:"html"`
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return ""
+	}
+
+	return c.checkMailContent(msg.Subject, msg.HTML, msg.Text, "")
 }
 
 // checkGenericMail 通用邮件检查
