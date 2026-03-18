@@ -30,9 +30,11 @@ type ServiceStatus struct {
 
 // HTTPClient HTTP客户端
 type HTTPClient struct {
-	client        *http.Client
-	serviceStatus map[string]*ServiceStatus
-	statusMutex   sync.RWMutex
+	client           *http.Client
+	serviceStatus    map[string]*ServiceStatus
+	statusMutex      sync.RWMutex
+	lastMailProvider string
+	lastMailMutex    sync.RWMutex
 }
 
 // 临时邮箱服务列表（按优先级排序）
@@ -42,11 +44,11 @@ var tempMailProviders = []TempMailProvider{
 		GenerateURL: "https://mail.chatgpt.org.uk/api/generate-email?api_key=YOUR_API_KEY",
 		CheckURL:    "https://mail.chatgpt.org.uk/api/emails?api_key=YOUR_API_KEY&email=%s",
 		Headers: map[string]string{
-			"User-Agent":  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-			"Referer":     "https://mail.chatgpt.org.uk",
-			"X-API-Key":   "YOUR_API_KEY",
+			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+			"Referer":    "https://mail.chatgpt.org.uk",
+			"X-API-Key":  "YOUR_API_KEY",
 		},
-		Priority:    1, // 最高优先级 - 多域名选择
+		Priority: 1, // 最高优先级 - 多域名选择
 	},
 	{
 		Name:        "Mail.tm",
@@ -135,6 +137,18 @@ func (c *HTTPClient) markServiceSuccess(name string) {
 	}
 }
 
+func (c *HTTPClient) setLastMailProvider(name string) {
+	c.lastMailMutex.Lock()
+	defer c.lastMailMutex.Unlock()
+	c.lastMailProvider = name
+}
+
+func (c *HTTPClient) getLastMailProvider() string {
+	c.lastMailMutex.RLock()
+	defer c.lastMailMutex.RUnlock()
+	return c.lastMailProvider
+}
+
 func (c *HTTPClient) SetDefaultHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
@@ -190,6 +204,7 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 
 		if email != "" {
 			c.markServiceSuccess(provider.Name)
+			c.setLastMailProvider(provider.Name)
 			fmt.Printf("[%s] ✅ 获取邮箱成功: %s\n", provider.Name, email)
 			return email, nil
 		}
@@ -197,7 +212,6 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 
 	return "", fmt.Errorf("所有临时邮箱服务都不可用")
 }
-
 
 // getMailTmEmail 从 Mail.tm 获取邮箱
 func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
@@ -254,7 +268,6 @@ func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
 
 	return address, nil
 }
-
 
 // getGenericEmail 通用邮箱获取方法
 func (c *HTTPClient) getGenericEmail(provider TempMailProvider) (string, error) {
@@ -324,7 +337,7 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 	login, domain := parts[0], parts[1]
 	fmt.Printf("📬 检查邮箱: %s (login=%s, domain=%s)\n", email, login, domain)
 
-for i := 0; i < maxRetries; i++ {
+	for i := 0; i < maxRetries; i++ {
 		// 尝试 Mail.tm
 		if strings.Contains(domain, "mail.tm") || strings.Contains(domain, "dollicons") {
 			if link := c.checkMailTm(); link != "" {
@@ -355,9 +368,14 @@ for i := 0; i < maxRetries; i++ {
 		time.Sleep(5 * time.Second)
 	}
 
+	provider := c.getLastMailProvider()
+	if provider != "" {
+		c.markServiceFailed(provider)
+		fmt.Printf("[超时] 服务 %s 等待验证邮件超时，已标记失败\n", provider)
+	}
+
 	return "", fmt.Errorf("等待验证邮件超时")
 }
-
 
 // checkMailTm 检查 Mail.tm 邮件
 func (c *HTTPClient) checkMailTm() string {
