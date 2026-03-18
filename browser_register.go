@@ -47,6 +47,13 @@ func NewBrowserRegister(config *Config) *BrowserRegister {
 	}
 }
 
+func NewBrowserRegisterWithProxy(config *Config, proxyURL string) *BrowserRegister {
+	return &BrowserRegister{
+		httpClient: NewHTTPClientWithProxy(proxyURL),
+		config:     config,
+	}
+}
+
 type Point struct {
 	X, Y float64
 }
@@ -415,7 +422,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		} else {
 			page.MustNavigate(verifyLink)
 			time.Sleep(5 * time.Second)
-br.handleCloudflare(page)
+			br.handleCloudflare(page)
 		}
 		br.saveDebugScreenshot(page, "09_after_verification")
 

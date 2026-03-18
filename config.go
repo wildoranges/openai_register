@@ -7,12 +7,13 @@ import (
 )
 
 type Config struct {
-	Proxy     string `json:"proxy"`
-	Headless  bool   `json:"headless"`
-	Timeout   int    `json:"timeout"`
-	Debug     bool   `json:"debug"`
-	OutputDir string `json:"output_dir"`
-	Count     int    `json:"count"`
+	Proxy     string   `json:"proxy"`
+	Proxies   []string `json:"proxies"`
+	Headless  bool     `json:"headless"`
+	Timeout   int      `json:"timeout"`
+	Debug     bool     `json:"debug"`
+	OutputDir string   `json:"output_dir"`
+	Count     int      `json:"count"`
 }
 
 func DefaultConfig() *Config {

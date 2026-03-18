@@ -38,6 +38,7 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 
 	original := &Config{
 		Proxy:     "http://proxy-host:port",
+		Proxies:   []string{"http://proxy1:8080", "http://proxy2:8080"},
 		Headless:  false,
 		Timeout:   42,
 		Debug:     true,
@@ -54,8 +55,31 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 		t.Fatalf("load failed: %v", err)
 	}
 
-	if *loaded != *original {
-		t.Fatalf("round-trip mismatch\nloaded=%+v\norig=%+v", *loaded, *original)
+	if loaded.Proxy != original.Proxy {
+		t.Fatalf("proxy mismatch: got %s, want %s", loaded.Proxy, original.Proxy)
+	}
+	if loaded.Headless != original.Headless {
+		t.Fatalf("headless mismatch: got %v, want %v", loaded.Headless, original.Headless)
+	}
+	if loaded.Timeout != original.Timeout {
+		t.Fatalf("timeout mismatch: got %d, want %d", loaded.Timeout, original.Timeout)
+	}
+	if loaded.Debug != original.Debug {
+		t.Fatalf("debug mismatch: got %v, want %v", loaded.Debug, original.Debug)
+	}
+	if loaded.OutputDir != original.OutputDir {
+		t.Fatalf("output dir mismatch: got %s, want %s", loaded.OutputDir, original.OutputDir)
+	}
+	if loaded.Count != original.Count {
+		t.Fatalf("count mismatch: got %d, want %d", loaded.Count, original.Count)
+	}
+	if len(loaded.Proxies) != len(original.Proxies) {
+		t.Fatalf("proxies length mismatch: got %d, want %d", len(loaded.Proxies), len(original.Proxies))
+	}
+	for i := range original.Proxies {
+		if loaded.Proxies[i] != original.Proxies[i] {
+			t.Fatalf("proxy[%d] mismatch: got %s, want %s", i, loaded.Proxies[i], original.Proxies[i])
+		}
 	}
 }
 

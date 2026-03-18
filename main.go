@@ -14,7 +14,6 @@ func main() {
 	fmt.Println("====================================")
 	fmt.Println()
 
-	// Parse --config flag first
 	configPath := "./config.json"
 	for i := 0; i < len(os.Args); i++ {
 		if os.Args[i] == "--config" || os.Args[i] == "-config" {
@@ -47,23 +46,30 @@ func main() {
 		} else if arg == "--debug" || arg == "-debug" {
 			config.Debug = true
 		} else if arg == "--config" || arg == "-config" {
-			// Skip --config flag and its value
 			skipNext = true
 			continue
 		} else if len(arg) > 8 && arg[:8] == "--config=" {
-			// Skip --config=value
 			continue
 		} else {
 			fmt.Sscanf(arg, "%d", &count)
 		}
 	}
 
-	if config.Proxy != "" {
-		fmt.Printf("代理: %s\n", config.Proxy)
-	}
 	fmt.Printf("无头模式: %v\n", config.Headless)
 	fmt.Printf("输出目录: %s\n", config.OutputDir)
 	fmt.Printf("注册数量: %d\n\n", count)
+
+	var proxyPool *ProxyPool
+	if len(config.Proxies) > 0 {
+		proxyPool = NewProxyPool(config.Proxies)
+		proxyPool.TestAll()
+		if proxyPool.GetAvailableCount() == 0 {
+			fmt.Println("\n❌ 没有可用的代理，退出")
+			return
+		}
+	} else if config.Proxy != "" {
+		fmt.Printf("代理: %s\n", config.Proxy)
+	}
 
 	if simMode {
 		fmt.Println("[模拟模式] 生成测试凭证...")
@@ -106,15 +112,27 @@ func main() {
 	} else {
 		fmt.Printf("将注册 %d 个账号\n\n", count)
 
-		httpClient := NewHTTPClientWithProxy(config.Proxy)
-		brOAuth := NewBrowserRegisterOAuth(config)
 		successCount := 0
 		for i := 0; i < count; i++ {
 			fmt.Printf("\n========== 注册第 %d/%d 个账号 ==========\n", i+1, count)
 
+			currentProxy := config.Proxy
+			if proxyPool != nil {
+				currentProxy = proxyPool.GetNext()
+				fmt.Printf("使用代理: %s\n", maskProxyURL(currentProxy))
+			}
+
+			httpClient := NewHTTPClientWithProxy(currentProxy)
+			brOAuth := NewBrowserRegisterOAuthWithProxy(config, currentProxy)
+
 			email, err := httpClient.GetTempEmail()
 			if err != nil {
 				fmt.Printf("获取临时邮箱失败: %v\n", err)
+				if i < count-1 {
+					waitTime := 10 + rand.Intn(10)
+					fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+					time.Sleep(time.Duration(waitTime) * time.Second)
+				}
 				continue
 			}
 			fmt.Printf("临时邮箱: %s\n", email)
@@ -122,7 +140,6 @@ func main() {
 			password := GeneratePassword()
 			fmt.Printf("生成密码: %s\n", password)
 
-			// 使用 OAuth PKCE 模式获取 refresh_token
 			credentials, regErr := brOAuth.RegisterWithOAuth(email, password)
 
 			if regErr != nil {
@@ -131,7 +148,9 @@ func main() {
 				} else {
 					fmt.Printf("注册失败: %v\n", regErr)
 				}
-				// 失败后也等待，避免频繁请求触发限制
+				if proxyPool != nil {
+					proxyPool.MarkFailed(currentProxy)
+				}
 				if i < count-1 {
 					waitTime := 10 + rand.Intn(10)
 					fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
