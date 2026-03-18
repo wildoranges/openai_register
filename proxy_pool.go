@@ -84,6 +84,8 @@ func (p *ProxyPool) testProxy(idx int) {
 		Timeout: 15 * time.Second,
 	}
 
+	ipInfo := p.getProxyIP(client)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -102,13 +104,6 @@ func (p *ProxyPool) testProxy(idx int) {
 	}
 	defer resp.Body.Close()
 
-	ipInfo := p.getProxyIP(client)
-	if ipInfo != "" {
-		fmt.Printf("  ✅ %s → %s\n", maskProxyURL(proxy.URL), ipInfo)
-	} else {
-		fmt.Printf("  ✅ %s (状态: %d)\n", maskProxyURL(proxy.URL), resp.StatusCode)
-	}
-
 	p.mu.Lock()
 	proxy.Available = true
 	proxy.LastCheck = time.Now()
@@ -122,17 +117,77 @@ func (p *ProxyPool) testProxy(idx int) {
 		}
 	}
 	p.mu.Unlock()
+
+	if ipInfo != "" {
+		fmt.Printf("  ✅ %s → %s\n", maskProxyURL(proxy.URL), ipInfo)
+	} else {
+		fmt.Printf("  ✅ %s (可用，状态: %d)\n", maskProxyURL(proxy.URL), resp.StatusCode)
+	}
 }
 
 func (p *ProxyPool) getProxyIP(client *http.Client) string {
+	ipServices := []string{
+		"https://icanhazip.com",
+		"https://ifconfig.me/ip",
+		"https://api.ipify.org",
+	}
+
+	for _, service := range ipServices {
+		ip := p.tryGetIP(client, service)
+		if ip != "" {
+			location := p.getIPLocation(ip)
+			if location != "" {
+				return fmt.Sprintf("%s (%s)", ip, location)
+			}
+			return ip
+		}
+	}
+	return ""
+}
+
+func (p *ProxyPool) tryGetIP(client *http.Client, url string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://ip-api.com/json?fields=status,country,city,query", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "curl/7.68.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return ""
 	}
 
+	ip := strings.TrimSpace(string(body))
+	if len(ip) > 0 && len(ip) < 50 {
+		for _, c := range ip {
+			if (c < '0' || c > '9') && c != '.' && c != ':' {
+				return ""
+			}
+		}
+		return ip
+	}
+	return ""
+}
+
+func (p *ProxyPool) getIPLocation(ip string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://ip-api.com/json/"+ip+"?fields=status,country,city", nil)
+	if err != nil {
+		return ""
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return ""
@@ -148,7 +203,6 @@ func (p *ProxyPool) getProxyIP(client *http.Client) string {
 		Status  string `json:"status"`
 		Country string `json:"country"`
 		City    string `json:"city"`
-		Query   string `json:"query"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -156,11 +210,10 @@ func (p *ProxyPool) getProxyIP(client *http.Client) string {
 	}
 
 	if result.Status == "success" {
-		country := result.Country
 		if result.City != "" {
-			country = result.Country + ", " + result.City
+			return result.Country + ", " + result.City
 		}
-		return fmt.Sprintf("%s (%s)", result.Query, country)
+		return result.Country
 	}
 	return ""
 }
