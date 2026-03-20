@@ -57,10 +57,10 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	// 构建授权 URL
 	authURL := BuildOAuthAuthURL(pkce, redirectURI)
 
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println("开始 OAuth PKCE 注册流程")
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("邮箱: %s\n", email)
+	Println(strings.Repeat("=", 60))
+	Println("开始 OAuth PKCE 注册流程")
+	Println(strings.Repeat("=", 60))
+	Printf("邮箱: %s\n", email)
 
 	// 启动浏览器
 	fingerprint := br.randomFingerprintProfile()
@@ -68,10 +68,10 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	if !found {
 		return nil, fmt.Errorf("未找到系统浏览器")
 	}
-	fmt.Printf("使用浏览器: %s\n", path)
+	Printf("使用浏览器: %s\n", path)
 
 	if br.config.Proxy != "" {
-		fmt.Printf("使用代理: %s\n", br.config.Proxy)
+		Printf("使用代理: %s\n", br.config.Proxy)
 	}
 
 	l := launcher.New().Bin(path).Headless(br.config.Headless).
@@ -91,7 +91,7 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 		proxyURL, err := url.Parse(br.config.Proxy)
 		if err == nil {
 			if proxyURL.User != nil {
-				fmt.Println("代理需要认证，启动本地转发器...")
+				Println("代理需要认证，启动本地转发器...")
 				localProxy, err = NewLocalProxyForwarder(br.config.Proxy)
 				if err != nil {
 					return nil, fmt.Errorf("创建本地代理失败: %v", err)
@@ -100,7 +100,7 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 				if err != nil {
 					return nil, fmt.Errorf("启动本地代理失败: %v", err)
 				}
-				fmt.Printf("本地代理已启动: %s\n", localAddr)
+				Printf("本地代理已启动: %s\n", localAddr)
 				l = l.Set("proxy-server", localAddr)
 				defer localProxy.Stop()
 			} else {
@@ -125,9 +125,9 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	defer page.MustClose()
 
 	_ = page.Timeout(60 * time.Second).WaitLoad()
-	fmt.Println("注入隐蔽脚本...")
+	Println("注入隐蔽脚本...")
 
-	fmt.Println("等待页面加载...")
+	Println("等待页面加载...")
 	time.Sleep(5 * time.Second)
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "oauth_01_initial")
@@ -138,7 +138,7 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 	}
 
 	// 等待 OAuth 回调
-	fmt.Println(">>> 等待 OAuth 回调 (最长 60 秒)...")
+	Println(">>> 等待 OAuth 回调 (最长 60 秒)...")
 	result := br.oauthServer.WaitForResult(60 * time.Second)
 
 	if result.Error != "" {
@@ -149,8 +149,8 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 		return nil, fmt.Errorf("State 不匹配，可能存在 CSRF 攻击")
 	}
 
-	fmt.Println("Authorization code 已获取")
-	fmt.Println("State 校验通过")
+	Println("Authorization code 已获取")
+	Println("State 校验通过")
 
 	// 用 authorization code 兑换 token
 	tokenResp, err := br.exchangeCodeForTokens(result.Code, pkce.CodeVerifier, redirectURI)
@@ -158,17 +158,17 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password string) (*Acco
 		return nil, fmt.Errorf("Token 兑换失败: %v", err)
 	}
 
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("OAuth 注册 + Token 获取成功!")
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("邮箱:          %s\n", email)
+	Println("\n" + strings.Repeat("=", 60))
+	Println("OAuth 注册 + Token 获取成功!")
+	Println(strings.Repeat("=", 60))
+	Printf("邮箱:          %s\n", email)
 	if len(tokenResp.AccessToken) > 40 {
-		fmt.Printf("Access Token:  %s...\n", tokenResp.AccessToken[:40])
+		Printf("Access Token:  %s...\n", tokenResp.AccessToken[:40])
 	}
 	if tokenResp.RefreshToken != "" && len(tokenResp.RefreshToken) > 40 {
-		fmt.Printf("Refresh Token: %s...\n", tokenResp.RefreshToken[:40])
+		Printf("Refresh Token: %s...\n", tokenResp.RefreshToken[:40])
 	}
-	fmt.Println(strings.Repeat("=", 60))
+	Println(strings.Repeat("=", 60))
 
 	credentials := &AccountCredentials{
 		Email:        email,
@@ -200,7 +200,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 				linkText := strings.ToLower(text.Value.String())
 				if strings.Contains(linkText, "sign up") || strings.Contains(linkText, "注册") {
 					link.Eval("() => this.click()")
-					fmt.Println("已点击 Sign up 链接")
+					Println("已点击 Sign up 链接")
 					signupClicked = true
 					break
 				}
@@ -217,7 +217,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	br.saveDebugScreenshot(page, "oauth_02_after_signup")
 
 	// 输入邮箱
-	fmt.Println("\n步骤1: 输入邮箱...")
+	Println("\n步骤1: 输入邮箱...")
 	emailSelectors := []string{
 		"input[name='email']",
 		"input[type='email']",
@@ -234,7 +234,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	br.saveDebugScreenshot(page, "oauth_03_email_entered")
 
 	// 点击 Continue
-	fmt.Println("\n步骤2: 点击 Continue...")
+	Println("\n步骤2: 点击 Continue...")
 	time.Sleep(1 * time.Second)
 	continueSelectors := []string{
 		"button[type='submit']",
@@ -250,7 +250,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	br.saveDebugScreenshot(page, "oauth_04_after_continue")
 
 	// 输入密码
-	fmt.Println("\n步骤3: 输入密码...")
+	Println("\n步骤3: 输入密码...")
 	time.Sleep(2 * time.Second)
 	passwordSelectors := []string{
 		"input[name='password']",
@@ -263,7 +263,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	if passwordFound {
 		br.saveDebugScreenshot(page, "oauth_05_password_entered")
 
-		fmt.Println("\n步骤4: 提交注册...")
+		Println("\n步骤4: 提交注册...")
 		time.Sleep(1 * time.Second)
 		br.clickButtonWithWait(page, []string{"button[type='submit']"}, 5*time.Second)
 		for _, btnText := range []string{"Continue", "Sign up", "Create account", "继续"} {
@@ -278,18 +278,18 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	br.saveDebugScreenshot(page, "oauth_06_after_submit")
 
 	// 等待验证邮件
-	fmt.Println("\n步骤5: 等待验证邮件...")
+	Println("\n步骤5: 等待验证邮件...")
 	verifyLink, err := br.httpClient.CheckEmail(email)
 	if err != nil {
-		fmt.Printf("获取验证邮件失败: %v\n", err)
-		fmt.Println("等待页面跳转...")
+		Printf("获取验证邮件失败: %v\n", err)
+		Println("等待页面跳转...")
 		time.Sleep(30 * time.Second)
 	} else {
-		fmt.Printf("获取到验证内容: %s\n", verifyLink)
+		Printf("获取到验证内容: %s\n", verifyLink)
 
 		if strings.HasPrefix(verifyLink, "OTP:") {
 			otpCode := strings.TrimPrefix(verifyLink, "OTP:")
-			fmt.Printf("检测到 OTP 验证码: %s\n", otpCode)
+			Printf("检测到 OTP 验证码: %s\n", otpCode)
 			br.handleOTPInput(page, otpCode)
 		} else {
 			page.MustNavigate(verifyLink)
@@ -298,7 +298,7 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 		}
 		br.saveDebugScreenshot(page, "oauth_07_after_verification")
 
-		fmt.Println("\n步骤6: 处理个人信息...")
+		Println("\n步骤6: 处理个人信息...")
 		time.Sleep(5 * time.Second)
 		if err := br.handlePostVerification(page); err != nil {
 			return err
@@ -317,12 +317,12 @@ func (br *BrowserRegisterOAuth) handleConsentPage(page *rod.Page) {
 		currentURL := page.MustEval("() => window.location.href").String()
 
 		if strings.Contains(currentURL, "consent") {
-			fmt.Println("检测到 consent 页面，点击同意...")
+			Println("检测到 consent 页面，点击同意...")
 			time.Sleep(1 * time.Second)
 
 			for _, btnText := range []string{"Continue", "Accept", "Agree", "继续", "同意", "接受"} {
 				if br.clickElementByText(page, "button", btnText) {
-					fmt.Printf("已点击 %s 按钮\n", btnText)
+					Printf("已点击 %s 按钮\n", btnText)
 					break
 				}
 			}
@@ -331,7 +331,7 @@ func (br *BrowserRegisterOAuth) handleConsentPage(page *rod.Page) {
 		}
 
 		if !strings.Contains(currentURL, "consent") && !strings.Contains(currentURL, "auth") {
-			fmt.Println("已离开 consent 页面")
+			Println("已离开 consent 页面")
 			break
 		}
 
@@ -349,7 +349,7 @@ func (br *BrowserRegisterOAuth) exchangeCodeForTokens(code, codeVerifier, redire
 		"code_verifier": {codeVerifier},
 	}
 
-	fmt.Println("正在用 authorization code 兑换 Token...")
+	Println("正在用 authorization code 兑换 Token...")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("POST", OAuthTokenURL, bytes.NewBufferString(data.Encode()))
@@ -380,6 +380,6 @@ func (br *BrowserRegisterOAuth) exchangeCodeForTokens(code, codeVerifier, redire
 		return nil, fmt.Errorf("解析响应失败: %v", err)
 	}
 
-	fmt.Println("Token 兑换成功!")
+	Println("Token 兑换成功!")
 	return &tokenResp, nil
 }

@@ -147,10 +147,10 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	if !found {
 		return nil, fmt.Errorf("未找到系统浏览器")
 	}
-	fmt.Printf("使用浏览器: %s\n", path)
+	Printf("使用浏览器: %s\n", path)
 
 	if br.config.Proxy != "" {
-		fmt.Printf("使用代理: %s\n", br.config.Proxy)
+		Printf("使用代理: %s\n", br.config.Proxy)
 	}
 
 	l := launcher.New().Bin(path).Headless(br.config.Headless).
@@ -173,7 +173,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		proxyURL, err := url.Parse(br.config.Proxy)
 		if err == nil {
 			if proxyURL.User != nil {
-				fmt.Println("代理需要认证，启动本地转发器...")
+				Println("代理需要认证，启动本地转发器...")
 				localProxy, err = NewLocalProxyForwarder(br.config.Proxy)
 				if err != nil {
 					return nil, fmt.Errorf("创建本地代理失败: %v", err)
@@ -182,7 +182,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 				if err != nil {
 					return nil, fmt.Errorf("启动本地代理失败: %v", err)
 				}
-				fmt.Printf("本地代理已启动: %s\n", localAddr)
+				Printf("本地代理已启动: %s\n", localAddr)
 				l = l.Set("proxy-server", localAddr)
 				defer localProxy.Stop()
 			} else {
@@ -207,7 +207,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	}
 
 	_ = page.Timeout(60 * time.Second).WaitLoad()
-	fmt.Println("注入隐蔽脚本...")
+	Println("注入隐蔽脚本...")
 	stealthScript := fmt.Sprintf(`() => {
 		Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 		Object.defineProperty(navigator, 'plugins', {
@@ -254,7 +254,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	)
 	page.MustEval(stealthScript)
 
-	fmt.Println("等待页面加载...")
+	Println("等待页面加载...")
 	time.Sleep(5 * time.Second)
 
 	br.handleCloudflare(page)
@@ -262,7 +262,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	br.saveDebugScreenshot(page, "01_initial_load")
 
-	fmt.Println("\n步骤0: 点击 Sign up for free...")
+	Println("\n步骤0: 点击 Sign up for free...")
 
 	signupClicked := false
 	for i := 0; i < 5; i++ {
@@ -276,7 +276,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 				btnText := strings.ToLower(text.Value.String())
 				if strings.Contains(btnText, "sign up") {
 					btn.Eval("() => this.click()")
-					fmt.Println("  已点击 'Sign up' 按钮")
+					Println("  已点击 'Sign up' 按钮")
 					signupClicked = true
 					break
 				}
@@ -289,19 +289,19 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	}
 
 	if !signupClicked {
-		fmt.Println("⚠️ 未找到 Sign up 按钮")
+		Println("⚠️ 未找到 Sign up 按钮")
 		br.saveDebugScreenshot(page, "02_signup_not_found")
 		return nil, fmt.Errorf("未找到 Sign up 按钮")
 	}
 
-	fmt.Println("等待注册页面加载 (React SPA)...")
+	Println("等待注册页面加载 (React SPA)...")
 	for i := 0; i < 20; i++ {
 		time.Sleep(1 * time.Second)
 		url, _ := page.Eval("() => window.location.href")
 		inputs, _ := page.Elements("input")
-		fmt.Printf("  [%ds] URL: %s | Inputs: %d\n", i+1, url.Value.String(), len(inputs))
+		Printf("  [%ds] URL: %s | Inputs: %d\n", i+1, url.Value.String(), len(inputs))
 		if len(inputs) > 0 {
-			fmt.Println("  表单已加载!")
+			Println("  表单已加载!")
 			break
 		}
 	}
@@ -310,12 +310,12 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	br.saveDebugScreenshot(page, "02_after_signup_click")
 
 	if blocked, reason := br.detectUnsupportedRegionError(page); blocked {
-		fmt.Println("❌ 检测到地区限制页面")
+		Println("❌ 检测到地区限制页面")
 		br.saveDebugScreenshot(page, "03_region_not_supported")
 		return nil, fmt.Errorf("当前IP/地区不支持OpenAI注册: %s", reason)
 	}
 
-	fmt.Println("\n步骤1: 输入邮箱...")
+	Println("\n步骤1: 输入邮箱...")
 	time.Sleep(1 * time.Second)
 
 	emailSelectors := []string{
@@ -331,18 +331,18 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	if !br.inputTextWithWait(page, emailSelectors, email, "Email", 15*time.Second) {
 		if blocked, reason := br.detectUnsupportedRegionError(page); blocked {
-			fmt.Println("❌ 邮箱输入前检测到地区限制")
+			Println("❌ 邮箱输入前检测到地区限制")
 			br.saveDebugScreenshot(page, "03_region_not_supported")
 			return nil, fmt.Errorf("当前IP/地区不支持OpenAI注册: %s", reason)
 		}
-		fmt.Println("⚠️ 未找到邮箱输入框")
+		Println("⚠️ 未找到邮箱输入框")
 		br.saveDebugScreenshot(page, "03_email_not_found")
 		br.debugPageElements(page, "input")
 		return nil, fmt.Errorf("未找到邮箱输入框")
 	}
 	br.saveDebugScreenshot(page, "04_email_entered")
 
-	fmt.Println("\n步骤2: 点击Continue...")
+	Println("\n步骤2: 点击Continue...")
 	time.Sleep(1 * time.Second)
 
 	continueClicked := br.clickButtonWithWait(page, []string{
@@ -354,18 +354,18 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 	if !continueClicked {
 		if !br.clickElementByText(page, "button", "Continue") {
-			fmt.Println("⚠️ 未找到Continue按钮")
+			Println("⚠️ 未找到Continue按钮")
 			br.saveDebugScreenshot(page, "05_continue_not_found")
 			br.debugPageElements(page, "button")
 		}
 	}
 
-	fmt.Println("等待页面响应...")
+	Println("等待页面响应...")
 	time.Sleep(3 * time.Second)
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "06_after_continue")
 
-	fmt.Println("\n步骤3: 输入密码...")
+	Println("\n步骤3: 输入密码...")
 	time.Sleep(2 * time.Second)
 
 	passwordSelectors := []string{
@@ -381,13 +381,13 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	passwordFound := br.inputTextWithWait(page, passwordSelectors, password, "Password", 15*time.Second)
 
 	if !passwordFound {
-		fmt.Println("⚠️ 未找到密码输入框，可能已使用OAuth或其他方式")
+		Println("⚠️ 未找到密码输入框，可能已使用OAuth或其他方式")
 		br.saveDebugScreenshot(page, "07_password_not_found")
 		br.debugPageElements(page, "input")
 	} else {
 		br.saveDebugScreenshot(page, "08_password_entered")
 
-		fmt.Println("\n步骤3: 提交注册...")
+		Println("\n步骤3: 提交注册...")
 		time.Sleep(1 * time.Second)
 
 		for _, btnText := range []string{"Continue", "Sign up", "Create account", "Create"} {
@@ -398,25 +398,25 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		br.clickButtonWithWait(page, []string{"button[type='submit']"}, 5*time.Second)
 	}
 
-	fmt.Println("\n等待注册处理...")
+	Println("\n等待注册处理...")
 	time.Sleep(5 * time.Second)
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "09_after_submit")
 
 	br.handleCaptcha(page)
 
-	fmt.Println("\n步骤4: 等待验证邮件...")
+	Println("\n步骤4: 等待验证邮件...")
 	verifyLink, err := br.httpClient.CheckEmail(email)
 	if err != nil {
-		fmt.Printf("获取验证邮件失败: %v\n", err)
-		fmt.Println("等待页面跳转或手动验证...")
+		Printf("获取验证邮件失败: %v\n", err)
+		Println("等待页面跳转或手动验证...")
 		time.Sleep(30 * time.Second)
 	} else {
-		fmt.Printf("获取到验证内容: %s\n", verifyLink)
+		Printf("获取到验证内容: %s\n", verifyLink)
 
 		if strings.HasPrefix(verifyLink, "OTP:") {
 			otpCode := strings.TrimPrefix(verifyLink, "OTP:")
-			fmt.Printf("检测到OTP验证码: %s\n", otpCode)
+			Printf("检测到OTP验证码: %s\n", otpCode)
 
 			br.handleOTPInput(page, otpCode)
 		} else {
@@ -426,16 +426,16 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 		}
 		br.saveDebugScreenshot(page, "09_after_verification")
 
-		fmt.Println("\n等待页面加载...")
+		Println("\n等待页面加载...")
 		time.Sleep(5 * time.Second)
 		br.handleCloudflare(page)
 
-		fmt.Println("\n处理后续步骤...")
+		Println("\n处理后续步骤...")
 		if err := br.handlePostVerification(page); err != nil {
 			return nil, err
 		}
 
-		fmt.Println("\n步骤5: 获取Access Token...")
+		Println("\n步骤5: 获取Access Token...")
 	}
 
 	accessToken, userID := br.getAccessToken(page)
@@ -503,7 +503,7 @@ func (br *BrowserRegister) detectUnsupportedRegionError(page *rod.Page) (bool, s
 }
 
 func (br *BrowserRegister) handleCloudflare(page *rod.Page) {
-	fmt.Println("检查Cloudflare挑战...")
+	Println("检查Cloudflare挑战...")
 
 	time.Sleep(2 * time.Second)
 
@@ -517,11 +517,11 @@ func (br *BrowserRegister) handleCloudflare(page *rod.Page) {
 			strings.Contains(bodyText, "Please Wait") ||
 			strings.Contains(bodyText, "DDoS protection") {
 
-			fmt.Printf("检测到Cloudflare挑战，等待自动解决... (%d/30)\n", i+1)
+			Printf("检测到Cloudflare挑战，等待自动解决... (%d/30)\n", i+1)
 
 			cfCheckbox, _ := page.Timeout(2 * time.Second).Element("input[type='checkbox']")
 			if cfCheckbox != nil {
-				fmt.Println("尝试点击Cloudflare复选框...")
+				Println("尝试点击Cloudflare复选框...")
 				cfCheckbox.MustClick()
 				time.Sleep(5 * time.Second)
 			}
@@ -546,7 +546,7 @@ func (br *BrowserRegister) handleCloudflare(page *rod.Page) {
 		} else {
 			currentURL := page.MustEval(`() => window.location.href`).String()
 			if !strings.Contains(currentURL, "challenge") && !strings.Contains(currentURL, "cdn-cgi") {
-				fmt.Println("Cloudflare挑战已通过!")
+				Println("Cloudflare挑战已通过!")
 				return
 			}
 			break
@@ -557,16 +557,16 @@ func (br *BrowserRegister) handleCloudflare(page *rod.Page) {
 }
 
 func (br *BrowserRegister) handleCaptcha(page *rod.Page) {
-	fmt.Println("检查验证码...")
+	Println("检查验证码...")
 
 	recaptcha, _ := page.Timeout(3 * time.Second).Element("iframe[src*='recaptcha']")
 	if recaptcha != nil {
-		fmt.Println("⚠️ 检测到reCAPTCHA - 等待手动完成或使用验证码服务")
+		Println("⚠️ 检测到reCAPTCHA - 等待手动完成或使用验证码服务")
 		for i := 0; i < 60; i++ {
 			time.Sleep(1 * time.Second)
 			check, _ := page.Timeout(500 * time.Millisecond).Element("iframe[src*='recaptcha']")
 			if check == nil {
-				fmt.Println("reCAPTCHA已通过!")
+				Println("reCAPTCHA已通过!")
 				return
 			}
 		}
@@ -574,12 +574,12 @@ func (br *BrowserRegister) handleCaptcha(page *rod.Page) {
 
 	hcaptcha, _ := page.Timeout(3 * time.Second).Element("iframe[src*='hcaptcha']")
 	if hcaptcha != nil {
-		fmt.Println("⚠️ 检测到hCaptcha - 等待手动完成或使用验证码服务")
+		Println("⚠️ 检测到hCaptcha - 等待手动完成或使用验证码服务")
 		for i := 0; i < 60; i++ {
 			time.Sleep(1 * time.Second)
 			check, _ := page.Timeout(500 * time.Millisecond).Element("iframe[src*='hcaptcha']")
 			if check == nil {
-				fmt.Println("hCaptcha已通过!")
+				Println("hCaptcha已通过!")
 				return
 			}
 		}
@@ -587,13 +587,13 @@ func (br *BrowserRegister) handleCaptcha(page *rod.Page) {
 
 	turnstile, _ := page.Timeout(2 * time.Second).Element("iframe[src*='challenges.cloudflare.com']")
 	if turnstile != nil {
-		fmt.Println("检测到Cloudflare Turnstile验证...")
+		Println("检测到Cloudflare Turnstile验证...")
 		time.Sleep(5 * time.Second)
 	}
 }
 
 func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
-	fmt.Println("\n步骤5: 输入OTP验证码...")
+	Println("\n步骤5: 输入OTP验证码...")
 	time.Sleep(2 * time.Second)
 
 	otpSelectors := []string{
@@ -616,11 +616,11 @@ func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
 					return rect.width > 0 && rect.height > 0;
 				}`)
 				if isVisible.Value.Bool() {
-					fmt.Printf("找到OTP输入框: %s\n", sel)
+					Printf("找到OTP输入框: %s\n", sel)
 					el.MustClick()
 					time.Sleep(200 * time.Millisecond)
 					el.MustSelectAllText().MustInput(otpCode)
-					fmt.Printf("已输入OTP码: %s\n", otpCode)
+					Printf("已输入OTP码: %s\n", otpCode)
 					time.Sleep(1 * time.Second)
 
 					br.clickButtonWithWait(page, []string{"button[type='submit']"}, 3*time.Second)
@@ -634,7 +634,7 @@ func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
 
 		singleInputs, err := page.Elements("input[maxlength='1']")
 		if err == nil && len(singleInputs) >= 6 {
-			fmt.Printf("找到%d个单字符输入框，逐个输入OTP\n", len(singleInputs))
+			Printf("找到%d个单字符输入框，逐个输入OTP\n", len(singleInputs))
 			for i, char := range otpCode {
 				if i < len(singleInputs) {
 					singleInputs[i].MustClick()
@@ -642,18 +642,18 @@ func (br *BrowserRegister) handleOTPInput(page *rod.Page, otpCode string) {
 					time.Sleep(100 * time.Millisecond)
 				}
 			}
-			fmt.Printf("已输入OTP码: %s\n", otpCode)
+			Printf("已输入OTP码: %s\n", otpCode)
 			time.Sleep(1 * time.Second)
 			br.clickButtonWithWait(page, []string{"button[type='submit']"}, 3*time.Second)
 			br.saveDebugScreenshot(page, "10_otp_entered")
 			return
 		}
 
-		fmt.Printf("等待OTP输入框... (%d/10)\n", i+1)
+		Printf("等待OTP输入框... (%d/10)\n", i+1)
 		time.Sleep(1 * time.Second)
 	}
 
-	fmt.Println("⚠️ 未找到OTP输入框")
+	Println("⚠️ 未找到OTP输入框")
 	br.saveDebugScreenshot(page, "10_otp_not_found")
 	br.debugPageElements(page, "input")
 }
@@ -666,10 +666,10 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 		time.Sleep(1 * time.Second)
 
 		currentURL := page.MustEval(`() => window.location.href`).String()
-		fmt.Printf("当前URL: %s (步骤: %d)\n", currentURL, step)
+		Printf("当前URL: %s (步骤: %d)\n", currentURL, step)
 
 		if strings.Contains(currentURL, "chatgpt.com") && !strings.Contains(currentURL, "auth") && !strings.Contains(currentURL, "log-in") && !strings.Contains(currentURL, "about-you") {
-			fmt.Println("已跳转到主页面!")
+			Println("已跳转到主页面!")
 			return nil
 		}
 
@@ -683,7 +683,7 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 						firstName := names[rand.Intn(len(names))]
 						lastName := names[rand.Intn(len(names))]
 						name = firstName + " " + lastName
-						fmt.Println("输入姓名: " + name)
+						Println("输入姓名: " + name)
 						nameInput.MustClick()
 						nameInput.MustInput(name)
 						time.Sleep(300 * time.Millisecond)
@@ -694,7 +694,7 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 
 				year := 1990 + rand.Intn(15)
 				birthdate := fmt.Sprintf("%d-01-15", year)
-				fmt.Printf("设置生日: %s\n", birthdate)
+				Printf("设置生日: %s\n", birthdate)
 
 				result := page.MustEval(fmt.Sprintf(`() => {
 					const input = document.querySelector('input[name="birthday"]');
@@ -707,11 +707,11 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 					}
 					return {success: false, error: 'birthday input not found'};
 				}`, birthdate))
-				fmt.Printf("设置生日结果: %v\n", result)
+				Printf("设置生日结果: %v\n", result)
 
 				time.Sleep(500 * time.Millisecond)
 
-				fmt.Println("尝试通过 API 提交...")
+				Println("尝试通过 API 提交...")
 				apiResult := page.MustEval(fmt.Sprintf(`() => {
 					return fetch('https://auth.openai.com/api/accounts/create_account', {
 						method: 'POST',
@@ -727,13 +727,13 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 					})
 					.catch(e => ({error: e.toString()}));
 				}`, name, birthdate))
-				fmt.Printf("API 结果: %v\n", apiResult)
+				Printf("API 结果: %v\n", apiResult)
 
 				// 检查邮箱不支持错误
 				if !apiResult.Get("ok").Bool() {
 					bodyStr := apiResult.Get("body").String()
 					if strings.Contains(bodyStr, "unsupported_email") || strings.Contains(bodyStr, "not supported") {
-						fmt.Println("❌ 邮箱不被 OpenAI 支持，跳过该账号")
+						Println("❌ 邮箱不被 OpenAI 支持，跳过该账号")
 						return ErrUnsupportedEmail
 					}
 				}
@@ -744,8 +744,8 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 						ContinueURL string `json:"continue_url"`
 					}
 					if err := json.Unmarshal([]byte(bodyStr), &apiResp); err == nil && apiResp.ContinueURL != "" {
-						fmt.Printf("获取到 continue_url: %s\n", apiResp.ContinueURL)
-						fmt.Println("导航到 continue_url...")
+						Printf("获取到 continue_url: %s\n", apiResp.ContinueURL)
+						Println("导航到 continue_url...")
 						page.MustNavigate(apiResp.ContinueURL)
 						time.Sleep(3 * time.Second)
 						step = 2
@@ -759,7 +759,7 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 				if submitBtn != nil {
 					disabled, _ := submitBtn.Eval(`() => this.disabled`)
 					if !disabled.Value.Bool() {
-						fmt.Println("点击 Submit 按钮...")
+						Println("点击 Submit 按钮...")
 						submitBtn.MustClick()
 						time.Sleep(2 * time.Second)
 					}
@@ -767,7 +767,7 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 
 				step = 1
 			} else if step == 1 {
-				fmt.Println("等待页面跳转...")
+				Println("等待页面跳转...")
 			}
 
 			br.saveDebugScreenshot(page, fmt.Sprintf("11_about_you_step%d", step))
@@ -782,12 +782,12 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 }
 
 func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
-	fmt.Println("尝试获取session...")
+	Println("尝试获取session...")
 
 	for attempt := 0; attempt < 5; attempt++ {
 		sessionPage, err := br.browser.Page(proto.TargetCreateTarget{URL: "https://chat.openai.com/api/auth/session"})
 		if err != nil {
-			fmt.Printf("打开session页面失败: %v\n", err)
+			Printf("打开session页面失败: %v\n", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -796,7 +796,7 @@ func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
 
 		content, err := sessionPage.Eval(`() => document.body.innerText`)
 		if err != nil {
-			fmt.Printf("获取session内容失败: %v\n", err)
+			Printf("获取session内容失败: %v\n", err)
 			sessionPage.MustClose()
 			time.Sleep(2 * time.Second)
 			continue
@@ -805,10 +805,10 @@ func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
 		contentStr := content.Value.String()
 		sessionPage.MustClose()
 
-		fmt.Printf("Session响应: %s\n", contentStr[:min(200, len(contentStr))])
+		Printf("Session响应: %s\n", contentStr[:min(200, len(contentStr))])
 
 		if strings.Contains(contentStr, "error") || strings.Contains(contentStr, "unauthorized") || contentStr == "" {
-			fmt.Printf("Session无效，等待重试... (%d/5)\n", attempt+1)
+			Printf("Session无效，等待重试... (%d/5)\n", attempt+1)
 			time.Sleep(3 * time.Second)
 			continue
 		}
@@ -821,17 +821,17 @@ func (br *BrowserRegister) getAccessToken(page *rod.Page) (string, string) {
 		}
 
 		if err := json.Unmarshal([]byte(contentStr), &session); err != nil {
-			fmt.Printf("解析session失败: %v\n", err)
+			Printf("解析session失败: %v\n", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
 		if session.AccessToken != "" {
-			fmt.Println("成功获取Access Token!")
+			Println("成功获取Access Token!")
 			return session.AccessToken, session.User.ID
 		}
 
-		fmt.Printf("Token为空，等待重试... (%d/5)\n", attempt+1)
+		Printf("Token为空，等待重试... (%d/5)\n", attempt+1)
 		time.Sleep(3 * time.Second)
 	}
 
@@ -851,7 +851,7 @@ func (br *BrowserRegister) clickElementByText(page *rod.Page, tag, text string) 
 		}
 		if strings.Contains(strings.ToLower(elText.Value.String()), strings.ToLower(text)) {
 			if err := el.Click(proto.InputMouseButtonLeft, 1); err == nil {
-				fmt.Printf("  已点击包含 '%s' 的元素\n", text)
+				Printf("  已点击包含 '%s' 的元素\n", text)
 				return true
 			}
 		}
@@ -885,7 +885,7 @@ func (br *BrowserRegister) clickElement(page *rod.Page, selectors []string, desc
 		}
 
 		if err := el.Click(proto.InputMouseButtonLeft, 1); err == nil {
-			fmt.Printf("  %s: 已点击 (%s)\n", desc, sel)
+			Printf("  %s: 已点击 (%s)\n", desc, sel)
 			return true
 		}
 	}
@@ -912,10 +912,10 @@ func (br *BrowserRegister) inputText(page *rod.Page, selectors []string, text, d
 			continue
 		}
 
-		fmt.Printf("  %s: 已输入\n", desc)
+		Printf("  %s: 已输入\n", desc)
 		return true
 	}
-	fmt.Printf("  %s: 未找到输入框\n", desc)
+	Printf("  %s: 未找到输入框\n", desc)
 	return false
 }
 
@@ -923,12 +923,12 @@ func (br *BrowserRegister) waitForReactComponents(page *rod.Page) {
 	for i := 0; i < 30; i++ {
 		inputs, err := page.Elements("input")
 		if err == nil && len(inputs) > 0 {
-			fmt.Printf("  检测到 %d 个input元素\n", len(inputs))
+			Printf("  检测到 %d 个input元素\n", len(inputs))
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	fmt.Println("  警告: 未检测到input元素")
+	Println("  警告: 未检测到input元素")
 }
 
 func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string, text, desc string, timeout time.Duration) bool {
@@ -961,13 +961,13 @@ func (br *BrowserRegister) inputTextWithWait(page *rod.Page, selectors []string,
 				continue
 			}
 
-			fmt.Printf("  %s: 已输入 (%s)\n", desc, sel)
+			Printf("  %s: 已输入 (%s)\n", desc, sel)
 			return true
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	fmt.Printf("  %s: 超时未找到\n", desc)
+	Printf("  %s: 超时未找到\n", desc)
 	return false
 }
 
@@ -990,7 +990,7 @@ func (br *BrowserRegister) clickButtonWithWait(page *rod.Page, selectors []strin
 			}
 
 			if err := el.Click(proto.InputMouseButtonLeft, 1); err == nil {
-				fmt.Printf("  已点击按钮: %s\n", sel)
+				Printf("  已点击按钮: %s\n", sel)
 				return true
 			}
 		}
@@ -1008,24 +1008,24 @@ func (br *BrowserRegister) saveDebugScreenshot(page *rod.Page, name string) {
 
 	filename := fmt.Sprintf("./debug_%s.png", name)
 	if err := os.WriteFile(filename, screenshot, 0644); err == nil {
-		fmt.Printf("  [调试] 截图已保存: %s\n", filename)
+		Printf("  [调试] 截图已保存: %s\n", filename)
 	}
 }
 
 func (br *BrowserRegister) debugPageElements(page *rod.Page, tag string) {
-	fmt.Printf("\n[调试] 页面 %s 元素:\n", tag)
+	Printf("\n[调试] 页面 %s 元素:\n", tag)
 
 	elements, err := page.Elements(tag)
 	if err != nil {
-		fmt.Printf("  获取元素失败: %v\n", err)
+		Printf("  获取元素失败: %v\n", err)
 		return
 	}
 
-	fmt.Printf("  找到 %d 个 %s 元素\n", len(elements), tag)
+	Printf("  找到 %d 个 %s 元素\n", len(elements), tag)
 
 	for i, el := range elements {
 		if i >= 10 {
-			fmt.Println("  ... (更多元素已省略)")
+			Println("  ... (更多元素已省略)")
 			break
 		}
 
@@ -1033,7 +1033,7 @@ func (br *BrowserRegister) debugPageElements(page *rod.Page, tag string) {
 		typ, _ := el.Eval(`() => this.type || ''`)
 		placeholder, _ := el.Eval(`() => this.placeholder || ''`)
 
-		fmt.Printf("  [%d] name=%s type=%s placeholder=%s\n",
+		Printf("  [%d] name=%s type=%s placeholder=%s\n",
 			i,
 			name.Value.String(),
 			typ.Value.String(),

@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+func init() {
+	_ = fmt.Sprintf
+}
+
 func main() {
 	fmt.Println("====================================")
 	fmt.Println("   OpenAI 账号注册工具")
@@ -27,7 +31,7 @@ func main() {
 
 	config, err := LoadConfig(configPath)
 	if err != nil {
-		fmt.Printf("加载配置失败: %v，使用默认配置\n", err)
+		Printf("加载配置失败: %v，使用默认配置\n", err)
 		config = DefaultConfig()
 	}
 
@@ -55,27 +59,27 @@ func main() {
 		}
 	}
 
-	fmt.Printf("无头模式: %v\n", config.Headless)
-	fmt.Printf("输出目录: %s\n", config.OutputDir)
-	fmt.Printf("注册数量: %d\n\n", count)
+	Printf("无头模式: %v\n", config.Headless)
+	Printf("输出目录: %s\n", config.OutputDir)
+	Printf("注册数量: %d\n\n", count)
 
 	var proxyPool *ProxyPool
 	if len(config.Proxies) > 0 {
 		proxyPool = NewProxyPool(config.Proxies)
 		proxyPool.TestAll()
 		if proxyPool.GetAvailableCount() == 0 {
-			fmt.Println("\n❌ 没有可用的代理，退出")
+			Println("\n❌ 没有可用的代理，退出")
 			return
 		}
 	} else if config.Proxy != "" {
-		fmt.Printf("代理: %s\n", config.Proxy)
+		Printf("代理: %s\n", config.Proxy)
 	}
 
 	if simMode {
-		fmt.Println("[模拟模式] 生成测试凭证...")
+		Println("[模拟模式] 生成测试凭证...")
 		successCount := 0
 		for i := 0; i < count; i++ {
-			fmt.Printf("\n========== 生成第 %d/%d 个凭证 ==========\n", i+1, count)
+			Printf("\n========== 生成第 %d/%d 个凭证 ==========\n", i+1, count)
 
 			ts := time.Now().Unix()
 			randStr := randomString(16)
@@ -90,36 +94,36 @@ func main() {
 			}
 
 			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
-				fmt.Printf("保存凭证失败: %v\n", err)
+				Printf("保存凭证失败: %v\n", err)
 				continue
 			}
 
-			fmt.Println("\n=== 凭证生成成功 ===")
-			fmt.Printf("邮箱: %s\n", credentials.Email)
-			fmt.Printf("密码: %s\n", credentials.Password)
+			Println("\n=== 凭证生成成功 ===")
+			Printf("邮箱: %s\n", credentials.Email)
+			Printf("密码: %s\n", credentials.Password)
 			if len(credentials.AccessToken) > 50 {
-				fmt.Printf("Access Token:  %s...\n", credentials.AccessToken[:50])
+				Printf("Access Token:  %s...\n", credentials.AccessToken[:50])
 			} else {
-				fmt.Printf("Access Token:  %s\n", credentials.AccessToken)
+				Printf("Access Token:  %s\n", credentials.AccessToken)
 			}
 			if credentials.RefreshToken != "" {
 				maxLen := minInt(50, len(credentials.RefreshToken))
-				fmt.Printf("Refresh Token: %s...\n", credentials.RefreshToken[:maxLen])
+				Printf("Refresh Token: %s...\n", credentials.RefreshToken[:maxLen])
 			}
 			successCount++
 		}
-		fmt.Printf("\n模拟模式成功生成账号数: %d/%d\n", successCount, count)
+		Printf("\n模拟模式成功生成账号数: %d/%d\n", successCount, count)
 	} else {
-		fmt.Printf("将注册 %d 个账号\n\n", count)
+		Printf("将注册 %d 个账号\n\n", count)
 
 		successCount := 0
 		for i := 0; i < count; i++ {
-			fmt.Printf("\n========== 注册第 %d/%d 个账号 ==========\n", i+1, count)
+			Printf("\n========== 注册第 %d/%d 个账号 ==========\n", i+1, count)
 
 			currentProxy := config.Proxy
 			if proxyPool != nil {
 				currentProxy = proxyPool.GetNext()
-				fmt.Printf("使用代理: %s\n", maskProxyURL(currentProxy))
+				Printf("使用代理: %s\n", maskProxyURL(currentProxy))
 			}
 
 			httpClient := NewHTTPClientWithProxy(currentProxy)
@@ -127,61 +131,61 @@ func main() {
 
 			email, err := httpClient.GetTempEmail()
 			if err != nil {
-				fmt.Printf("获取临时邮箱失败: %v\n", err)
+				Printf("获取临时邮箱失败: %v\n", err)
 				if i < count-1 {
 					waitTime := 10 + rand.Intn(10)
-					fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+					Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
 					time.Sleep(time.Duration(waitTime) * time.Second)
 				}
 				continue
 			}
-			fmt.Printf("临时邮箱: %s\n", email)
+			Printf("临时邮箱: %s\n", email)
 
 			password := GeneratePassword()
-			fmt.Printf("生成密码: %s\n", password)
+			Printf("生成密码: %s\n", password)
 
 			credentials, regErr := brOAuth.RegisterWithOAuth(email, password)
 
 			if regErr != nil {
 				if regErr == ErrUnsupportedEmail {
-					fmt.Printf("❌ 邮箱不被 OpenAI 支持: %s，跳过该账号\n", email)
+					Printf("❌ 邮箱不被 OpenAI 支持: %s，跳过该账号\n", email)
 				} else {
-					fmt.Printf("注册失败: %v\n", regErr)
+					Printf("注册失败: %v\n", regErr)
 				}
 				if proxyPool != nil {
 					proxyPool.MarkFailed(currentProxy)
 				}
 				if i < count-1 {
 					waitTime := 10 + rand.Intn(10)
-					fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+					Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
 					time.Sleep(time.Duration(waitTime) * time.Second)
 				}
 				continue
 			}
 			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
-				fmt.Printf("保存凭证失败: %v\n", err)
+				Printf("保存凭证失败: %v\n", err)
 			}
 
-			fmt.Println("\n=== 注册成功 ===")
-			fmt.Printf("邮箱: %s\n", credentials.Email)
+			Println("\n=== 注册成功 ===")
+			Printf("邮箱: %s\n", credentials.Email)
 			if len(credentials.AccessToken) > 50 {
-				fmt.Printf("Access Token:  %s...\n", credentials.AccessToken[:50])
+				Printf("Access Token:  %s...\n", credentials.AccessToken[:50])
 			} else {
-				fmt.Printf("Access Token:  %s\n", credentials.AccessToken)
+				Printf("Access Token:  %s\n", credentials.AccessToken)
 			}
 			if credentials.RefreshToken != "" && len(credentials.RefreshToken) > 50 {
-				fmt.Printf("Refresh Token: %s...\n", credentials.RefreshToken[:50])
+				Printf("Refresh Token: %s...\n", credentials.RefreshToken[:50])
 			}
-			fmt.Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
+			Printf("凭证已保存到 %s/openai_credentials.json\n", config.OutputDir)
 			successCount++
 
 			if i < count-1 {
 				waitTime := 10 + rand.Intn(10)
-				fmt.Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+				Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
 				time.Sleep(time.Duration(waitTime) * time.Second)
 			}
 		}
-		fmt.Printf("\n成功注册账号数: %d/%d\n", successCount, count)
+		Printf("\n成功注册账号数: %d/%d\n", successCount, count)
 	}
 
 	fmt.Println("\n====================================")

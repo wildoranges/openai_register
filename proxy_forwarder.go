@@ -102,7 +102,7 @@ func (lpf *LocalProxyForwarder) handleConnection(clientConn net.Conn) {
 
 		resp := string(respBuf[:proxyN])
 		if !strings.Contains(resp, "200") {
-			fmt.Printf("代理连接失败: %s\n", resp)
+			Printf("代理连接失败: %s\n", resp)
 			return
 		}
 

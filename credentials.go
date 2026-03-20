@@ -38,7 +38,7 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		if cred.Email == credentials.Email {
 			existing[i] = *credentials
 			found = true
-			fmt.Printf("更新已存在的凭证: %s\n", credentials.Email)
+			Printf("更新已存在的凭证: %s\n", credentials.Email)
 			break
 		}
 	}
@@ -68,7 +68,7 @@ codexAuth := map[string]interface{}{
 	codexData, _ := json.MarshalIndent(codexAuth, "", "  ")
 	codexFile := filepath.Join(dataDir, fmt.Sprintf("auth_%s.json", credentials.Email[:strings.Index(credentials.Email, "@")]))
 	os.WriteFile(codexFile, codexData, 0600)
-	fmt.Printf("CodeX凭证已保存到: %s\n", codexFile)
+	Printf("CodeX凭证已保存到: %s\n", codexFile)
 
 	tokenFile := filepath.Join(dataDir, "openai_tokens.txt")
 	existingTokens := ""

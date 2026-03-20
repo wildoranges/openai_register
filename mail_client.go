@@ -118,7 +118,7 @@ func (c *HTTPClient) markServiceFailed(name string) {
 	if status.FailCount >= 3 && status.PriorityAdjust < 10 {
 		status.PriorityAdjust += 1
 		status.LastAdjustTime = time.Now()
-		fmt.Printf("[调整] 服务 %s 连续失败 %d 次，优先级降低（当前调整值: +%d）\n", name, status.FailCount, status.PriorityAdjust)
+		Printf("[调整] 服务 %s 连续失败 %d 次，优先级降低（当前调整值: +%d）\n", name, status.FailCount, status.PriorityAdjust)
 	}
 }
 
@@ -132,7 +132,7 @@ func (c *HTTPClient) markServiceSuccess(name string) {
 		// 成功后恢复优先级
 		if status.PriorityAdjust > 0 {
 			status.PriorityAdjust = 0
-			fmt.Printf("[恢复] 服务 %s 优先级已恢复\n", name)
+			Printf("[恢复] 服务 %s 优先级已恢复\n", name)
 		}
 	}
 }
@@ -157,7 +157,7 @@ func (c *HTTPClient) SetDefaultHeaders(req *http.Request) {
 
 // GetTempEmail 获取临时邮箱（按动态优先级轮询）
 func (c *HTTPClient) GetTempEmail() (string, error) {
-	fmt.Println("\n📧 正在获取临时邮箱...")
+	Println("\n📧 正在获取临时邮箱...")
 
 	// 创建服务列表副本并按动态优先级排序
 	type providerWithPriority struct {
@@ -184,7 +184,7 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 	// 按排序后的顺序遍历所有服务
 	for _, pp := range sortedProviders {
 		provider := pp.provider
-		fmt.Printf("[%s] 尝试获取邮箱（优先级: %d）\n", provider.Name, pp.priority)
+		Printf("[%s] 尝试获取邮箱（优先级: %d）\n", provider.Name, pp.priority)
 
 		var email string
 		var err error
@@ -197,7 +197,7 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 		}
 
 		if err != nil {
-			fmt.Printf("[%s] 获取失败: %v\n", provider.Name, err)
+			Printf("[%s] 获取失败: %v\n", provider.Name, err)
 			c.markServiceFailed(provider.Name)
 			continue
 		}
@@ -205,7 +205,7 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 		if email != "" {
 			c.markServiceSuccess(provider.Name)
 			c.setLastMailProvider(provider.Name)
-			fmt.Printf("[%s] ✅ 获取邮箱成功: %s\n", provider.Name, email)
+			Printf("[%s] ✅ 获取邮箱成功: %s\n", provider.Name, email)
 			return email, nil
 		}
 	}
@@ -275,7 +275,7 @@ func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
 	}
 	c.setMailTmPassword(password)
 
-	fmt.Printf("[Mail.tm] 已创建账户: %s\n", address)
+	Printf("[Mail.tm] 已创建账户: %s\n", address)
 	return address, nil
 }
 
@@ -313,7 +313,7 @@ func (c *HTTPClient) getGenericEmail(provider TempMailProvider) (string, error) 
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	fmt.Printf("[%s] API响应: %s\n", provider.Name, string(body)[:min(200, len(body))])
+	Printf("[%s] API响应: %s\n", provider.Name, string(body)[:min(200, len(body))])
 
 	// 尝试多种解析格式
 	var result1 struct {
@@ -361,7 +361,7 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 		return "", fmt.Errorf("无效的邮箱格式")
 	}
 	login, domain := parts[0], parts[1]
-	fmt.Printf("📬 检查邮箱: %s (login=%s, domain=%s)\n", email, login, domain)
+	Printf("📬 检查邮箱: %s (login=%s, domain=%s)\n", email, login, domain)
 
 	for i := 0; i < maxRetries; i++ {
 		if currentMailService != nil && currentMailService.Name == "Mail.tm" {
@@ -389,14 +389,14 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 			}
 		}
 
-		fmt.Printf("  ⏳ 等待验证邮件... (%d/%d)\n", i+1, maxRetries)
+		Printf("  ⏳ 等待验证邮件... (%d/%d)\n", i+1, maxRetries)
 		time.Sleep(5 * time.Second)
 	}
 
 	provider := c.getLastMailProvider()
 	if provider != "" {
 		c.markServiceFailed(provider)
-		fmt.Printf("[超时] 服务 %s 等待验证邮件超时，已标记失败\n", provider)
+		Printf("[超时] 服务 %s 等待验证邮件超时，已标记失败\n", provider)
 	}
 
 	return "", fmt.Errorf("等待验证邮件超时")
@@ -578,9 +578,9 @@ func (c *HTTPClient) checkMailContent(subject, htmlContent, content, body string
 			fullContent = body
 		}
 
-		fmt.Printf("📧 找到验证邮件: %s\n", subject)
+		Printf("📧 找到验证邮件: %s\n", subject)
 		if link := extractVerifyLink(fullContent); link != "" {
-			fmt.Printf("✅ 提取到验证链接: %s\n", link)
+			Printf("✅ 提取到验证链接: %s\n", link)
 			return link
 		}
 	}

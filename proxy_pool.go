@@ -39,7 +39,7 @@ func NewProxyPool(proxyURLs []string) *ProxyPool {
 }
 
 func (p *ProxyPool) TestAll() {
-	fmt.Println("\n🔍 测试代理池...")
+	Println("\n🔍 测试代理池...")
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 5)
@@ -64,7 +64,7 @@ func (p *ProxyPool) TestAll() {
 			available++
 		}
 	}
-	fmt.Printf("\n✅ 可用代理: %d/%d\n", available, len(p.proxies))
+	Printf("\n✅ 可用代理: %d/%d\n", available, len(p.proxies))
 }
 
 func (p *ProxyPool) testProxy(idx int) {
@@ -73,7 +73,7 @@ func (p *ProxyPool) testProxy(idx int) {
 	proxyURL, err := url.Parse(proxy.URL)
 	if err != nil {
 		proxy.Error = fmt.Sprintf("解析URL失败: %v", err)
-		fmt.Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), proxy.Error)
+		Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), proxy.Error)
 		return
 	}
 
@@ -99,7 +99,7 @@ func (p *ProxyPool) testProxy(idx int) {
 	resp, err := client.Do(req)
 	if err != nil {
 		proxy.Error = fmt.Sprintf("连接失败: %v", err)
-		fmt.Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), proxy.Error)
+		Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), proxy.Error)
 		return
 	}
 	defer resp.Body.Close()
@@ -119,9 +119,9 @@ func (p *ProxyPool) testProxy(idx int) {
 	p.mu.Unlock()
 
 	if ipInfo != "" {
-		fmt.Printf("  ✅ %s → %s\n", maskProxyURL(proxy.URL), ipInfo)
+		Printf("  ✅ %s → %s\n", maskProxyURL(proxy.URL), ipInfo)
 	} else {
-		fmt.Printf("  ✅ %s (可用，状态: %d)\n", maskProxyURL(proxy.URL), resp.StatusCode)
+		Printf("  ✅ %s (可用，状态: %d)\n", maskProxyURL(proxy.URL), resp.StatusCode)
 	}
 }
 

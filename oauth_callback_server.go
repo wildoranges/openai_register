@@ -43,7 +43,7 @@ func (s *OAuthCallbackServer) Start() (string, error) {
 	preferredAddr := fmt.Sprintf("127.0.0.1:%d", OAuthCallbackPort)
 	listener, err := net.Listen("tcp", preferredAddr)
 	if err != nil {
-		fmt.Printf("⚠️ OAuth 回调端口 %d 不可用: %v，自动尝试可用端口...\n", OAuthCallbackPort, err)
+		Printf("⚠️ OAuth 回调端口 %d 不可用: %v，自动尝试可用端口...\n", OAuthCallbackPort, err)
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			return "", fmt.Errorf("启动 OAuth 回调服务器失败: %v", err)
@@ -68,14 +68,14 @@ func (s *OAuthCallbackServer) Start() (string, error) {
 
 	go func() {
 		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("OAuth 回调服务器错误: %v\n", err)
+			Printf("OAuth 回调服务器错误: %v\n", err)
 		}
 	}()
 
 	s.port = port
 	s.started = true
 	redirectURI := BuildOAuthRedirectURI(s.port)
-	fmt.Printf("🌐 OAuth 回调服务器已启动: %s\n", redirectURI)
+	Printf("🌐 OAuth 回调服务器已启动: %s\n", redirectURI)
 
 	// 等待服务器启动
 	time.Sleep(100 * time.Millisecond)
@@ -100,7 +100,7 @@ func (s *OAuthCallbackServer) Stop() error {
 
 	s.port = 0
 	s.started = false
-	fmt.Println("🔒 OAuth 回调服务器已关闭")
+	Println("🔒 OAuth 回调服务器已关闭")
 	return nil
 }
 
@@ -110,7 +110,7 @@ func (s *OAuthCallbackServer) handleCallback(w http.ResponseWriter, r *http.Requ
 
 	// 检查是否有错误
 	if errParam := query.Get("error"); errParam != "" {
-		fmt.Printf("❌ OAuth 回调收到错误: %s\n", errParam)
+		Printf("❌ OAuth 回调收到错误: %s\n", errParam)
 		s.resultCh <- &OAuthResult{Error: errParam}
 		http.Error(w, fmt.Sprintf("授权失败: %s", errParam), http.StatusBadRequest)
 		return
@@ -121,13 +121,13 @@ func (s *OAuthCallbackServer) handleCallback(w http.ResponseWriter, r *http.Requ
 	state := query.Get("state")
 
 	if code == "" {
-		fmt.Println("❌ OAuth 回调缺少 code 参数")
+		Println("❌ OAuth 回调缺少 code 参数")
 		s.resultCh <- &OAuthResult{Error: "no_code"}
 		http.Error(w, "Missing authorization code", http.StatusBadRequest)
 		return
 	}
 
-	fmt.Printf("✅ OAuth 回调收到 code (前8位: %s...)\n", truncateString(code, 8))
+	Printf("✅ OAuth 回调收到 code (前8位: %s...)\n", truncateString(code, 8))
 	s.resultCh <- &OAuthResult{Code: code, State: state}
 
 	// 重定向到成功页面
