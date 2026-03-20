@@ -212,11 +212,70 @@ cp config.json.example config.json
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `proxy` | string | 代理地址（支持认证） | 空 |
+| `proxies` | []string | 代理地址列表（多代理轮换） | 空 |
 | `headless` | bool | 无头模式 | true |
 | `timeout` | int | 超时时间（秒） | 600 |
 | `debug` | bool | 调试模式 | false |
 | `output_dir` | string | 输出目录 | creds |
 | `count` | int | 注册账号数量 | 1 |
+
+#### 代理配置详解
+
+**为什么需要代理？**
+- 绕过地区限制（OpenAI 在某些地区不可用）
+- 避免 Cloudflare 验证失败（IP 被 Cloudflare 标记为可疑时会导致注册失败）
+- 提高注册成功率
+
+**代理格式：**
+
+```
+协议://用户名:密码@代理服务器地址:端口
+```
+
+**支持的协议：**
+- `http://` - HTTP 代理
+- `https://` - HTTPS 代理（推荐）
+- `socks5://` - SOCKS5 代理
+
+**单代理配置：**
+
+```json
+{
+  "proxy": "http://proxy-host:port"
+}
+```
+
+**多代理轮换配置：**
+
+当配置多个代理时，系统会在每次注册时随机选择一个代理，适用于需要大量注册的场景：
+
+```json
+{
+  "proxies": [
+    "http://proxy-host:port",
+    "http://proxy-host:port",
+    "socks5://user3:pass3@proxy3.example.com:1080"
+  ]
+}
+```
+
+**无需认证的代理：**
+
+```json
+{
+  "proxy": "http://proxy.example.com:8080"
+}
+```
+
+**代理选择优先级：**
+1. 如果配置了 `proxies`（数组），系统会从中随机选择
+2. 如果未配置 `proxies`，则使用 `proxy`（单个代理）
+3. 如果两者都未配置，则直连（不推荐）
+
+**推荐配置：**
+- 使用干净的住宅代理 IP，避免数据中心 IP 被 Cloudflare 标记
+- 确保代理支持 HTTPS
+- 如果使用多代理，建议配置 3-5 个代理进行轮换
 
 ```bash
 # 构建
