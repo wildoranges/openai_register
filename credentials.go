@@ -55,11 +55,11 @@ func SaveCredentialsWithDir(credentials *AccountCredentials, dataDir string) err
 		return err
 	}
 
-codexAuth := map[string]interface{}{
+	codexAuth := map[string]interface{}{
 		"type":          "codex",
 		"access_token":  credentials.AccessToken,
 		"refresh_token": credentials.RefreshToken,
-		"id_token":       credentials.IDToken,
+		"id_token":      credentials.IDToken,
 		"email":         credentials.Email,
 		"user_id":       credentials.UserID,
 		"expired":       time.Now().Add(time.Duration(credentials.ExpiresIn) * time.Second).Format(time.RFC3339),
@@ -93,7 +93,7 @@ codexAuth := map[string]interface{}{
 		existingTokens = strings.Join(newLines, "\n")
 	}
 
-newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_REFRESH_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
+	newRecord := fmt.Sprintf("# Account: %s\nOPENAI_ACCESS_TOKEN=%s\nOPENAI_REFRESH_TOKEN=%s\nOPENAI_EMAIL=%s\nOPENAI_PASSWORD=%s\n\n",
 		credentials.Email, credentials.AccessToken, credentials.RefreshToken, credentials.Email, credentials.Password)
 	existingTokens += newRecord
 
