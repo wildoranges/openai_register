@@ -72,7 +72,26 @@ func main() {
 			return
 		}
 	} else if config.Proxy != "" {
-		Printf("代理: %s\n", config.Proxy)
+		Printf("代理: %s\n", maskProxyURL(config.Proxy))
+		Println("\n🔍 测试代理...")
+		result := TestSingleProxy(config.Proxy)
+		if !result.Available {
+			Printf("\n❌ 代理测试失败: %s\n", result.Error)
+			Println("代理测试失败，后续注册可能会遇到问题")
+		}
+		if result.IP != "" {
+			location := result.IP
+			if result.Country != "" {
+				location += " (" + result.Country
+				if result.City != "" {
+					location += ", " + result.City
+				}
+				location += ")"
+			}
+			Printf("✅ 代理可用 → %s\n", location)
+		} else {
+			Println("✅ 代理可用")
+		}
 	}
 
 	if simMode {

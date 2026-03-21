@@ -289,3 +289,115 @@ func maskProxyURL(proxyURL string) string {
 	}
 	return proxyURL
 }
+
+type ProxyTestResult struct {
+	Available bool
+	IP        string
+	Country   string
+	City      string
+	Error     string
+}
+
+// TestSingleProxy tests a single proxy URL and returns the result.
+func TestSingleProxy(proxyURL string) *ProxyTestResult {
+	result := &ProxyTestResult{}
+
+	parsedURL, err := url.Parse(proxyURL)
+	if err != nil {
+		result.Error = fmt.Sprintf("解析URL失败: %v", err)
+		return result
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(parsedURL),
+		},
+		Timeout: 15 * time.Second,
+	}
+
+	ipServices := []string{
+		"https://icanhazip.com",
+		"https://ifconfig.me/ip",
+		"https://api.ipify.org",
+	}
+
+	var proxyIP string
+	for _, service := range ipServices {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		req, err := http.NewRequestWithContext(ctx, "GET", service, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		req.Header.Set("User-Agent", "curl/7.68.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		cancel()
+
+		ip := strings.TrimSpace(string(body))
+		if len(ip) > 0 && len(ip) < 50 {
+			valid := true
+			for _, c := range ip {
+				if (c < '0' || c > '9') && c != '.' && c != ':' {
+					valid = false
+					break
+				}
+			}
+			if valid {
+				proxyIP = ip
+				break
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://auth.openai.com/", nil)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Error = fmt.Sprintf("连接OpenAI失败: %v", err)
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.Available = true
+
+	if proxyIP != "" {
+		result.IP = proxyIP
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel2()
+
+		locReq, _ := http.NewRequestWithContext(ctx2, "GET", "http://ip-api.com/json/"+proxyIP+"?fields=status,country,city", nil)
+		locClient := &http.Client{Timeout: 10 * time.Second}
+		locResp, err := locClient.Do(locReq)
+		if err == nil {
+			body, _ := io.ReadAll(locResp.Body)
+			locResp.Body.Close()
+
+			var locResult struct {
+				Status  string `json:"status"`
+				Country string `json:"country"`
+				City    string `json:"city"`
+			}
+			if json.Unmarshal(body, &locResult) == nil && locResult.Status == "success" {
+				result.Country = locResult.Country
+				result.City = locResult.City
+			}
+		}
+	}
+
+	return result
+}
