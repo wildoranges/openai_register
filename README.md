@@ -364,28 +364,6 @@ crontab -e
 
 ### 1.6 工作流程
 
-**普通模式：**
-```
-1. 获取临时邮箱地址（chatgpt.org.uk API）
-        ↓
-2. 生成随机密码
-        ↓
-3. 访问 OpenAI 注册页面
-        ↓
-4. 通过 Cloudflare 验证（代理 + 隐蔽脚本）
-        ↓
-5. 填写邮箱和密码
-        ↓
-6. 等待并解析 OTP 验证码邮件
-        ↓
-7. 处理 "about-you" 页面
-        ↓
-8. 完成注册，提取 access_token
-        ↓
-9. 保存凭证到文件
-```
-
-**OAuth 模式（`--oauth`）：**
 ```
 1. 获取临时邮箱地址（chatgpt.org.uk API）
         ↓
