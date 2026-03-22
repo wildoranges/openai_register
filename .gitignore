@@ -3,6 +3,7 @@ openai-register
 
 # Debug images
 debug_*.png
+*.html
 
 # Credentials (sensitive)
 creds*/

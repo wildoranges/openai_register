@@ -18,13 +18,16 @@ import (
 
 // 定义错误类型
 var (
-	ErrUnsupportedEmail = fmt.Errorf("邮箱不被支持，跳过该账号")
+	ErrUnsupportedEmail     = fmt.Errorf("邮箱不被支持，跳过该账号")
+	ErrUserAlreadyExists    = fmt.Errorf("账号已存在，需要登录")
+	ErrLoginFailedAliasUsed = fmt.Errorf("登录失败：别名已被其他账号使用，需要新别名")
 )
 
 type BrowserRegister struct {
 	browser    *rod.Browser
 	httpClient *HTTPClient
 	config     *Config
+	smsClient  *SMSActivateClient
 }
 
 type BrowserFingerprintProfile struct {
@@ -41,17 +44,25 @@ type BrowserFingerprintProfile struct {
 }
 
 func NewBrowserRegister(config *Config) *BrowserRegister {
-	return &BrowserRegister{
+	br := &BrowserRegister{
 		httpClient: NewHTTPClientWithProxy(config.Proxy),
 		config:     config,
 	}
+	if config.SMSActivate.Enabled && config.SMSActivate.APIKey != "" {
+		br.smsClient = NewSMSActivateClient(config.SMSActivate.APIKey)
+	}
+	return br
 }
 
 func NewBrowserRegisterWithProxy(config *Config, proxyURL string) *BrowserRegister {
-	return &BrowserRegister{
+	br := &BrowserRegister{
 		httpClient: NewHTTPClientWithProxy(proxyURL),
 		config:     config,
 	}
+	if config.SMSActivate.Enabled && config.SMSActivate.APIKey != "" {
+		br.smsClient = NewSMSActivateClient(config.SMSActivate.APIKey)
+	}
+	return br
 }
 
 type Point struct {
@@ -673,6 +684,45 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 			return nil
 		}
 
+		if strings.Contains(currentURL, "add-phone") {
+			Println("检测到 add-phone 页面，尝试跳过手机验证...")
+
+			skipBtn, _ := page.Timeout(2 * time.Second).Element("button[data-testid='skip-button']")
+			if skipBtn != nil {
+				Println("点击 Skip 按钮...")
+				skipBtn.MustClick()
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			if br.clickElementByText(page, "button", "Skip") {
+				Println("点击 Skip 按钮 (by text)...")
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			for _, skipText := range []string{"Do this later", "Not now", "Skip for now", "稍后", "跳过"} {
+				if br.clickElementByText(page, "button", skipText) {
+					Printf("点击 %s 按钮...\n", skipText)
+					time.Sleep(2 * time.Second)
+					break
+				}
+			}
+
+			phoneInput, _ := page.Timeout(1 * time.Second).Element("input[type='tel']")
+			if phoneInput != nil {
+				Println("找到手机输入框，尝试直接提交...")
+				submitBtn, _ := page.Timeout(1 * time.Second).Element("button[type='submit']")
+				if submitBtn != nil {
+					submitBtn.MustClick()
+					time.Sleep(2 * time.Second)
+				}
+			}
+
+			br.saveDebugScreenshot(page, "add_phone_page")
+			continue
+		}
+
 		if strings.Contains(currentURL, "about-you") {
 			if step == 0 {
 				nameInput, _ := page.Timeout(2 * time.Second).Element("input[name='name']")
@@ -729,12 +779,15 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 				}`, name, birthdate))
 				Printf("API 结果: %v\n", apiResult)
 
-				// 检查邮箱不支持错误
+				bodyStr := apiResult.Get("body").String()
 				if !apiResult.Get("ok").Bool() {
-					bodyStr := apiResult.Get("body").String()
 					if strings.Contains(bodyStr, "unsupported_email") || strings.Contains(bodyStr, "not supported") {
 						Println("❌ 邮箱不被 OpenAI 支持，跳过该账号")
 						return ErrUnsupportedEmail
+					}
+					if strings.Contains(bodyStr, "user_already_exists") || strings.Contains(bodyStr, "already exists") {
+						Println("⚠️ 账号已存在，需要登录")
+						return ErrUserAlreadyExists
 					}
 				}
 

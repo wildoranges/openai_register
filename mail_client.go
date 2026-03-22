@@ -48,7 +48,7 @@ var tempMailProviders = []TempMailProvider{
 			"Referer":    "https://mail.chatgpt.org.uk",
 			"X-API-Key":  "YOUR_API_KEY",
 		},
-		Priority: 1, // 最高优先级 - 多域名选择
+		Priority: 1,
 	},
 	{
 		Name:        "Mail.tm",
@@ -58,11 +58,18 @@ var tempMailProviders = []TempMailProvider{
 		Priority:    2,
 	},
 	{
+		Name:        "DuckMail",
+		GenerateURL: "https://api.duckmail.sbs/domains",
+		CheckURL:    "https://api.duckmail.sbs/messages",
+		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+		Priority:    3,
+	},
+	{
 		Name:        "tempmail.plus",
 		GenerateURL: "https://tempmail.plus/api/v1/mail",
 		CheckURL:    "https://tempmail.plus/api/v1/mail/%s",
 		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    3,
+		Priority:    4,
 	},
 }
 
@@ -192,6 +199,8 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 		switch provider.Name {
 		case "Mail.tm":
 			email, err = c.getMailTmEmail(provider)
+		case "DuckMail":
+			email, err = c.getDuckMailEmail(provider)
 		default:
 			email, err = c.getGenericEmail(provider)
 		}
@@ -279,9 +288,78 @@ func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
 	return address, nil
 }
 
+func (c *HTTPClient) getDuckMailEmail(provider TempMailProvider) (string, error) {
+	resp, err := c.client.Get(provider.GenerateURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var domainsResp struct {
+		Data []struct {
+			Domain string `json:"domain"`
+		} `json:"hydra:member"`
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &domainsResp); err != nil {
+		var altResp struct {
+			Data []struct {
+				Domain string `json:"domain"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &altResp); len(altResp.Data) == 0 {
+			return "", fmt.Errorf("获取域名失败")
+		}
+		domainsResp.Data = altResp.Data
+	}
+
+	if len(domainsResp.Data) == 0 {
+		return "", fmt.Errorf("没有可用域名")
+	}
+
+	domain := domainsResp.Data[0].Domain
+	address := fmt.Sprintf("%s@%s", randomString(10), domain)
+	password := "DuckPass" + randomString(8) + "!"
+
+	createReq := map[string]interface{}{
+		"address":   address,
+		"password":  password,
+		"expiresIn": 3600000,
+	}
+	createBody, _ := json.Marshal(createReq)
+
+	req, _ := http.NewRequest("POST", "https://api.duckmail.sbs/accounts", strings.NewReader(string(createBody)))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp2, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != 200 && resp2.StatusCode != 201 {
+		body2, _ := io.ReadAll(resp2.Body)
+		return "", fmt.Errorf("创建账户失败: %d - %s", resp2.StatusCode, string(body2))
+	}
+
+	currentMailService = &MailService{
+		Name:   "DuckMail",
+		Email:  address,
+		Domain: domain,
+	}
+	c.setDuckMailPassword(password)
+
+	Printf("[DuckMail] 已创建账户: %s\n", address)
+	return address, nil
+}
+
 // mailTmPassword 存储 Mail.tm 密码
 var mailTmPassword string
 var mailTmPasswordMutex sync.RWMutex
+
+var duckMailPassword string
+var duckMailPasswordMutex sync.RWMutex
 
 func (c *HTTPClient) setMailTmPassword(password string) {
 	mailTmPasswordMutex.Lock()
@@ -293,6 +371,18 @@ func (c *HTTPClient) getMailTmPassword() string {
 	mailTmPasswordMutex.RLock()
 	defer mailTmPasswordMutex.RUnlock()
 	return mailTmPassword
+}
+
+func (c *HTTPClient) setDuckMailPassword(password string) {
+	duckMailPasswordMutex.Lock()
+	defer duckMailPasswordMutex.Unlock()
+	duckMailPassword = password
+}
+
+func (c *HTTPClient) getDuckMailPassword() string {
+	duckMailPasswordMutex.RLock()
+	defer duckMailPasswordMutex.RUnlock()
+	return duckMailPassword
 }
 
 // getGenericEmail 通用邮箱获取方法
@@ -369,11 +459,15 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 				return link, nil
 			}
 		}
+		if currentMailService != nil && currentMailService.Name == "DuckMail" {
+			if link := c.checkDuckMail(); link != "" {
+				return link, nil
+			}
+		}
 
-		// 尝试通用服务
 		for _, provider := range tempMailProviders {
-			if provider.Name == "Mail.tm" {
-				continue // 已经尝试过
+			if provider.Name == "Mail.tm" || provider.Name == "DuckMail" {
+				continue
 			}
 
 			var link string
@@ -503,6 +597,113 @@ func (c *HTTPClient) checkMailTmMessage(token, messageID string) string {
 	}
 
 	return c.checkMailContent(msg.Subject, msg.HTML, msg.Text, "")
+}
+
+func (c *HTTPClient) checkDuckMail() string {
+	if currentMailService == nil || currentMailService.Email == "" {
+		return ""
+	}
+
+	password := c.getDuckMailPassword()
+	if password == "" {
+		return ""
+	}
+
+	token := c.getDuckMailToken(currentMailService.Email, password)
+	if token == "" {
+		return ""
+	}
+
+	messages := c.getDuckMailMessages(token)
+	for _, msg := range messages {
+		if link := c.checkDuckMailMessage(token, msg.ID); link != "" {
+			return link
+		}
+	}
+	return ""
+}
+
+func (c *HTTPClient) getDuckMailToken(email, password string) string {
+	reqBody := map[string]string{"address": email, "password": password}
+	body, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", "https://api.duckmail.sbs/token", strings.NewReader(string(body)))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	if json.Unmarshal(respBody, &result); result.Token != "" {
+		return result.Token
+	}
+	return ""
+}
+
+func (c *HTTPClient) getDuckMailMessages(token string) []struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+} {
+	req, err := http.NewRequest("GET", "https://api.duckmail.sbs/messages", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var messages []struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(body, &messages)
+	return messages
+}
+
+func (c *HTTPClient) checkDuckMailMessage(token, messageID string) string {
+	req, err := http.NewRequest("GET", "https://api.duckmail.sbs/messages/"+messageID, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var msg struct {
+		Subject string   `json:"subject"`
+		Text    string   `json:"text"`
+		HTML    []string `json:"html"`
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return ""
+	}
+
+	htmlContent := ""
+	if len(msg.HTML) > 0 {
+		htmlContent = msg.HTML[0]
+	}
+
+	return c.checkMailContent(msg.Subject, htmlContent, msg.Text, "")
 }
 
 // checkGenericMail 通用邮件检查

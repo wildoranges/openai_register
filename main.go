@@ -38,11 +38,15 @@ func main() {
 	simMode := false
 	count := config.Count
 	skipNext := false
-	for _, arg := range os.Args[1:] {
+	specifiedEmail := ""
+	specifiedPassword := ""
+	specifiedOTP := ""
+	for i := 0; i < len(os.Args); i++ {
 		if skipNext {
 			skipNext = false
 			continue
 		}
+		arg := os.Args[i]
 		if arg == "--sim" || arg == "-sim" {
 			simMode = true
 		} else if arg == "--head" || arg == "-head" {
@@ -54,14 +58,45 @@ func main() {
 			continue
 		} else if len(arg) > 8 && arg[:8] == "--config=" {
 			continue
+		} else if arg == "--email" || arg == "-email" {
+			if i+1 < len(os.Args) {
+				specifiedEmail = os.Args[i+1]
+				i++
+			}
+		} else if len(arg) > 7 && arg[:7] == "--email=" {
+			specifiedEmail = arg[7:]
+		} else if arg == "--password" || arg == "-password" {
+			if i+1 < len(os.Args) {
+				specifiedPassword = os.Args[i+1]
+				i++
+			}
+		} else if len(arg) > 10 && arg[:10] == "--password=" {
+			specifiedPassword = arg[10:]
+		} else if arg == "--otp" || arg == "-otp" {
+			if i+1 < len(os.Args) {
+				specifiedOTP = os.Args[i+1]
+				i++
+			}
+		} else if len(arg) > 5 && arg[:5] == "--otp=" {
+			specifiedOTP = arg[5:]
 		} else {
 			fmt.Sscanf(arg, "%d", &count)
 		}
 	}
 
+	// 如果指定了邮箱，强制注册数量为 1
+	if specifiedEmail != "" {
+		count = 1
+	}
+
 	Printf("无头模式: %v\n", config.Headless)
 	Printf("输出目录: %s\n", config.OutputDir)
-	Printf("注册数量: %d\n\n", count)
+	if specifiedEmail != "" {
+		Printf("指定邮箱: %s\n", specifiedEmail)
+		Printf("注册数量: 1 (指定邮箱模式)\n\n")
+	} else {
+		Printf("注册数量: %d\n\n", count)
+	}
 
 	var proxyPool *ProxyPool
 	if len(config.Proxies) > 0 {
@@ -148,29 +183,95 @@ func main() {
 			httpClient := NewHTTPClientWithProxy(currentProxy)
 			brOAuth := NewBrowserRegisterOAuthWithProxy(config, currentProxy)
 
-			email, err := httpClient.GetTempEmail()
-			if err != nil {
-				Printf("获取临时邮箱失败: %v\n", err)
-				if i < count-1 {
-					waitTime := 10 + rand.Intn(10)
-					Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
-					time.Sleep(time.Duration(waitTime) * time.Second)
+			var email, password string
+			var err error
+			var aliasGen *GmailAliasGenerator
+
+			if specifiedEmail != "" {
+				email = specifiedEmail
+				if specifiedPassword != "" {
+					password = specifiedPassword
+				} else {
+					password = GeneratePassword()
 				}
-				continue
+				Printf("使用指定邮箱: %s\n", email)
+				Printf("密码: %s\n", password)
+			} else if config.GmailOAuth.Enabled && config.GmailOAuth.Credential != nil {
+				aliasGen = NewGmailAliasGenerator(config.GmailOAuth.Credential)
+				password = GeneratePassword()
+				email = aliasGen.GenerateAliasWithPassword(password)
+				Printf("生成 Gmail 别名: %s\n", email)
+				Printf("基础邮箱: %s\n", aliasGen.GetBaseEmail())
+				Printf("密码: %s\n", password)
+			} else {
+				email, err = httpClient.GetTempEmail()
+				if err != nil {
+					Printf("获取临时邮箱失败: %v\n", err)
+					if i < count-1 {
+						waitTime := 10 + rand.Intn(10)
+						Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+						time.Sleep(time.Duration(waitTime) * time.Second)
+					}
+					continue
+				}
+				Printf("临时邮箱: %s\n", email)
+
+				password = GeneratePassword()
+				Printf("生成密码: %s\n", password)
 			}
-			Printf("临时邮箱: %s\n", email)
 
-			password := GeneratePassword()
-			Printf("生成密码: %s\n", password)
+			var credentials *AccountCredentials
+			var regErr error
+			maxAttempts := 5
 
-			credentials, regErr := brOAuth.RegisterWithOAuth(email, password)
+		RETRY_LOOP:
+			for attempt := 0; attempt < maxAttempts; attempt++ {
+				if attempt > 0 {
+					Printf("\n=== 重试第 %d 次 (共 %d 次) ===\n", attempt, maxAttempts-1)
+				}
 
-			if regErr != nil {
+				credentials, regErr = brOAuth.RegisterWithOAuth(email, password, specifiedOTP)
+
+				if regErr == nil {
+					break RETRY_LOOP
+				}
+
 				if regErr == ErrUnsupportedEmail {
 					Printf("❌ 邮箱不被 OpenAI 支持: %s，跳过该账号\n", email)
-				} else {
-					Printf("注册失败: %v\n", regErr)
+					break RETRY_LOOP
 				}
+
+				if regErr == ErrUserAlreadyExists {
+					Printf("⚠️ 账号已存在 (注册阶段)，尝试登录获取凭证...\n")
+					loginPassword := password
+					if aliasGen != nil {
+						if storedPassword := aliasGen.GetPasswordForAlias(email); storedPassword != "" {
+							Printf("使用存储的密码登录...\n")
+							loginPassword = storedPassword
+						}
+					}
+					credentials, regErr = brOAuth.LoginWithOAuth(email, loginPassword, specifiedOTP)
+					if regErr == nil {
+						break RETRY_LOOP
+					}
+
+					if (regErr == ErrLoginFailedAliasUsed || regErr == ErrUserAlreadyExists) && aliasGen != nil && attempt < maxAttempts-1 {
+						Printf("⚠️ 别名已被使用，生成新别名重试...\n")
+						password = GeneratePassword()
+						email = aliasGen.GenerateAliasWithPassword(password)
+						Printf("新 Gmail 别名: %s\n", email)
+						Printf("新密码: %s\n", password)
+						continue RETRY_LOOP
+					}
+					Printf("登录失败: %v\n", regErr)
+					break RETRY_LOOP
+				}
+
+				Printf("注册失败: %v\n", regErr)
+				break RETRY_LOOP
+			}
+
+			if regErr != nil || credentials == nil {
 				if proxyPool != nil {
 					proxyPool.MarkFailed(currentProxy)
 				}
