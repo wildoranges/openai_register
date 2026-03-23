@@ -190,7 +190,9 @@ func main() {
 			var brOAuth *BrowserRegisterOAuth
 
 			if webmailMode {
-				webMailClient = NewWebMailClient(currentProxy, config.Headless)
+				// Use WebMail for both getting temp email AND checking verification emails
+				brOAuth = NewBrowserRegisterOAuthWithWebMail(config, currentProxy, config.Headless)
+				webMailClient = brOAuth.webMailClient
 				if err := webMailClient.Start(); err != nil {
 					Printf("启动 WebMail 失败: %v\n", err)
 					if i < count-1 {
@@ -201,7 +203,9 @@ func main() {
 					continue
 				}
 				defer webMailClient.Close()
-				brOAuth = NewBrowserRegisterOAuthWithWebMail(config, currentProxy, config.Headless)
+				// Also initialize httpClient as fallback for email checking
+				httpClient = NewHTTPClientWithProxy(currentProxy)
+				brOAuth.httpClient = httpClient
 			} else {
 				httpClient = NewHTTPClientWithProxy(currentProxy)
 				brOAuth = NewBrowserRegisterOAuth(config, currentProxy)

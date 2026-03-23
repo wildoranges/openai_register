@@ -174,6 +174,11 @@ func (w *WebMailClient) CheckEmailSkipUsed(email string, usedOTPs map[string]boo
 	maxRetries := 30
 	Printf("📬 WebMail 检查邮箱: %s\n", email)
 
+	// Navigate to the specific email inbox
+	if err := w.NavigateToEmail(email); err != nil {
+		Printf("  导航到邮箱页面失败: %v\n", err)
+	}
+
 	for i := 0; i < maxRetries; i++ {
 		refreshBtn, _ := w.page.Timeout(2 * time.Second).Element("button:has-text('Refresh')")
 		if refreshBtn != nil {
@@ -181,50 +186,52 @@ func (w *WebMailClient) CheckEmailSkipUsed(email string, usedOTPs map[string]boo
 			time.Sleep(2 * time.Second)
 		}
 
-		emailItems := w.page.MustEval(`() => {
-			const items = [];
-			const emailElements = document.querySelectorAll('[class*="email"], [class*="message"], [class*="inbox"] a, li');
-			for (const el of emailElements) {
-				const subject = el.querySelector('[class*="subject"]')?.innerText || '';
-				const content = el.innerText || el.textContent || '';
-				const href = el.href || '';
-				if (subject || content) {
-					items.push({ subject, content, href });
+		// Look for email items from OpenAI
+		emailContent := w.page.MustEval(`() => {
+			const results = [];
+			// Look for email list items
+			const items = document.querySelectorAll('li, [class*="email"], [class*="message"], tr, .inbox-item');
+			for (const item of items) {
+				const text = (item.innerText || item.textContent || '').toLowerCase();
+				const subject = item.querySelector('[class*="subject"]')?.innerText || '';
+				// Check if this looks like an OpenAI verification email
+				if (text.includes('verify') || text.includes('verification') || 
+					subject.toLowerCase().includes('verify') || subject.toLowerCase().includes('openai')) {
+					results.push({ type: 'item', subject: subject, content: item.innerText, html: item.outerHTML });
 				}
 			}
-			return items;
+			// Also check the full page content for verification links
+			const bodyText = document.body.innerText || '';
+			const bodyHtml = document.body.innerHTML || '';
+			if (bodyText.includes('Your ChatGPT code') || bodyText.includes('verification code') ||
+				bodyHtml.includes('auth.openai.com')) {
+				results.push({ type: 'page', content: bodyText, html: bodyHtml });
+			}
+			return results;
 		}`)
 
-		itemsStr := emailItems.String()
-		if itemsStr != "" && strings.Contains(itemsStr, "verify") {
-			if link := w.extractVerifyLinkSkipUsed(itemsStr, usedOTPs); link != "" {
-				Printf("✅ WebMail 提取到验证链接: %s\n", link)
-				return link, nil
+		contentStr := emailContent.String()
+
+		// Try to extract OTP code first
+		if otp := extractOTPCode(contentStr); otp != "" {
+			if usedOTPs != nil && usedOTPs[otp] {
+				Printf("  跳过已使用的OTP: %s\n", otp)
+			} else {
+				Printf("✅ WebMail 提取到验证码: %s\n", otp)
+				return "OTP:" + otp, nil
 			}
 		}
 
-		links := w.page.MustEval(`() => {
-			const links = [];
-			document.querySelectorAll('a, [onclick]').forEach(el => {
-				const text = (el.innerText || el.textContent || '').toLowerCase();
-				if (text.includes('verify') || text.includes('openai') || text.includes('chatgpt')) {
-					links.push({ text: el.innerText, href: el.href || '' });
-				}
-			});
-			return links;
-		}`)
+		// Try to extract verification link
+		if link := w.extractVerifyLinkSkipUsed(contentStr, usedOTPs); link != "" {
+			Printf("✅ WebMail 提取到验证链接: %s\n", link)
+			return link, nil
+		}
 
-		linksStr := links.String()
-		if strings.Contains(linksStr, "http") {
-			if idx := strings.Index(linksStr, "https://"); idx != -1 {
-				end := idx
-				for end < len(linksStr) && linksStr[end] != '"' && linksStr[end] != '\'' && linksStr[end] != ' ' && linksStr[end] != '<' {
-					end++
-				}
-				if end > idx {
-					return linksStr[idx:end], nil
-				}
-			}
+		// Try clicking on email items to open them
+		if link := w.openEmailAndGetContent(usedOTPs); link != "" {
+			Printf("✅ WebMail 从邮件内容提取到验证信息: %s\n", link)
+			return link, nil
 		}
 
 		Printf("  ⏳ WebMail 等待验证邮件... (%d/%d)\n", i+1, maxRetries)

@@ -5,7 +5,7 @@
 ## 功能特性
 
 - 🔄 **批量注册** - 自动批量注册 OpenAI/ChatGPT 账号
-- 📧 **临时邮箱** - 自动获取临时邮箱（chatgpt.org.uk API）
+- 📧 **临时邮箱** - 自动获取临时邮箱（支持 API 和 WebMail 两种模式）
 - 🛡️ **Cloudflare 绕过** - 自动处理 Cloudflare 验证（代理 + 隐蔽脚本）
 - 🔐 **OTP 自动处理** - 自动解析验证码邮件
 - 📝 **多格式输出** - 导出 JSON、TXT、CodeX CLI 等多种凭证格式
@@ -325,9 +325,6 @@ crontab -e
 - 日志保存在 `logs/` 目录，自动清理 7 天前的日志
 - 注册完成后自动转换为 CLIProxyAPI 格式，输出到 `~/.cli-proxy-api/`
 - 自动清理无 `refresh_token` 的凭证
-- `config_cron.json` 是定时任务专用配置，不会覆盖 `config.json`
-- 日志保存在 `logs/` 目录，自动清理 7 天前的日志
-- 注册完成后自动转换为 CLIProxyAPI 格式，输出到 `~/.cli-proxy-api/`
 
 **命令行参数：**
 
@@ -337,6 +334,7 @@ crontab -e
 | `--head` | 显示浏览器窗口（调试用） |
 | `--sim` | 模拟模式，生成测试数据 |
 | `--debug` | 调试模式，保存截图 |
+| `--webmail` | 使用 WebMail 模式获取临时邮箱（绕过 API 配额限制） |
 
 > **说明：** 默认使用 OAuth PKCE 模式，获取 `access_token` + `refresh_token`
 注册完成后，凭证默认保存在 `creds/` 目录：
@@ -349,7 +347,9 @@ crontab -e
 
 ### 1.5 临时邮箱服务
 
-本项目使用 GPTMail (chatgpt.org.uk) 作为临时邮箱服务：
+本项目使用 GPTMail (chatgpt.org.uk) 作为临时邮箱服务，支持两种模式：
+
+#### API 模式（默认）
 
 | 项目 | 说明 |
 |------|------|
@@ -362,10 +362,24 @@ crontab -e
 - 配额用完时返回 `Daily quota exceeded`
 - 可购买专属 API Key：[LDC Store](https://shop.chatgpt.org.uk/buy/prod_1768420938389)
 
+#### WebMail 模式（推荐）
+
+当 API 配额用完时，可使用 WebMail 模式：
+
+```bash
+# 使用 WebMail 模式（通过浏览器获取临时邮箱）
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register --webmail 5
+```
+
+**WebMail 模式优势：**
+- 绕过 API 配额限制
+- 同时支持获取邮箱和检查验证码
+- 更稳定可靠
+
 ### 1.6 工作流程
 
 ```
-1. 获取临时邮箱地址（chatgpt.org.uk API）
+1. 获取临时邮箱地址（API 或 WebMail 模式）
         ↓
 2. 启动本地 OAuth 回调服务器（端口 1455）
         ↓
@@ -522,12 +536,12 @@ EOF
 
 ### Q2: 临时邮箱获取失败或502 Bad Gateway
 
-**原因：** chatgpt.org.uk API 不可用
+**原因：** chatgpt.org.uk API 不可用或配额用完
 
 **解决方案：**
-1. 检查网络连接
-2. 尝试使用/更换代理
-3. 检查 API 是否返回错误信息
+1. 使用 WebMail 模式：`./openai-register --webmail 5`
+2. 检查网络连接
+3. 尝试使用/更换代理
 4. 等待一段时间后重试
 
 ### Q3: CLIProxyAPI 无法加载凭证

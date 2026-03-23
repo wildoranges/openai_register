@@ -136,6 +136,13 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password, otp string) (
 
 	Println("等待页面加载...")
 	time.Sleep(5 * time.Second)
+
+	// Save page HTML for debugging
+	htmlContent := page.MustEval(`() => document.documentElement.outerHTML`).String()
+	os.WriteFile("debug_oauth_initial.html", []byte(htmlContent), 0644)
+	Printf("已保存页面 HTML 到 debug_oauth_initial.html\n")
+	Printf("当前 URL: %s\n", page.MustEval(`() => window.location.href`).String())
+
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "oauth_01_initial")
 
@@ -460,52 +467,86 @@ func (br *BrowserRegisterOAuth) handleOAuthLogin(page *rod.Page, email, password
 		} else {
 			otpInput, _ := page.Timeout(3 * time.Second).Element("input[type='text']")
 			if otpInput != nil {
-				Println("检测到 OTP 输入框，尝试触发发送新验证码...")
-
-				for _, btnText := range []string{"Resend code", "Resend", "重新发送", "重发"} {
-					if br.clickElementByText(page, "button", btnText) {
-						Printf("已点击 %s 按钮，等待新验证码...\n", btnText)
-						time.Sleep(3 * time.Second)
-						break
-					}
-				}
-
-				for _, linkText := range []string{"Resend code", "Resend", "重新发送", "重发"} {
-					if br.clickElementByText(page, "a", linkText) {
-						Printf("已点击 %s 链接，等待新验证码...\n", linkText)
-						time.Sleep(3 * time.Second)
-						break
-					}
-				}
+				Println("检测到 OTP 输入框，先检查邮箱是否有验证码...")
 
 				var otp string
-				if br.webMailClient != nil {
-					Println("使用 WebMail 等待新验证码...")
-					for retry := 0; retry < 30; retry++ {
-						verifyLink, err := br.webMailClient.CheckEmailSkipUsed(email, br.usedOTPs)
-						if err == nil && verifyLink != "" {
-							if strings.HasPrefix(verifyLink, "OTP:") {
-								otp = strings.TrimPrefix(verifyLink, "OTP:")
-								Printf("WebMail 获取到验证码: %s\n", otp)
-								break
-							}
+
+				// 先尝试从邮箱获取验证码（不点 Resend）
+				if br.webMailClient != nil && br.webMailClient.page != nil {
+					Println("使用 WebMail 检查验证码...")
+					verifyLink, err := br.webMailClient.CheckEmailSkipUsed(email, br.usedOTPs)
+					if err == nil && verifyLink != "" {
+						if strings.HasPrefix(verifyLink, "OTP:") {
+							otp = strings.TrimPrefix(verifyLink, "OTP:")
+							Printf("WebMail 获取到验证码: %s\n", otp)
 						}
-						Printf("等待验证码... (%d/30)\n", retry+1)
-						time.Sleep(5 * time.Second)
 					}
-				} else if br.httpClient != nil {
-					Println("使用临时邮箱 API 等待新验证码...")
-					for retry := 0; retry < 30; retry++ {
+				}
+
+				if otp == "" && br.httpClient != nil {
+					Println("使用 HTTP API 检查验证码...")
+					for retry := 0; retry < 5; retry++ {
 						verifyLink, err := br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
 						if err == nil && verifyLink != "" {
 							if strings.HasPrefix(verifyLink, "OTP:") {
 								otp = strings.TrimPrefix(verifyLink, "OTP:")
-								Printf("临时邮箱获取到验证码: %s\n", otp)
+								Printf("HTTP API 获取到验证码: %s\n", otp)
 								break
 							}
 						}
-						Printf("等待验证码... (%d/30)\n", retry+1)
-						time.Sleep(5 * time.Second)
+						Printf("等待验证码... (%d/5)\n", retry+1)
+						time.Sleep(3 * time.Second)
+					}
+				}
+
+				// 如果没有获取到验证码，才点击 Resend
+				if otp == "" {
+					Println("邮箱中没有验证码，点击 Resend...")
+					for _, btnText := range []string{"Resend code", "Resend", "重新发送", "重发"} {
+						if br.clickElementByText(page, "button", btnText) {
+							Printf("已点击 %s 按钮，等待新验证码...\n", btnText)
+							time.Sleep(3 * time.Second)
+							break
+						}
+					}
+
+					for _, linkText := range []string{"Resend code", "Resend", "重新发送", "重发"} {
+						if br.clickElementByText(page, "a", linkText) {
+							Printf("已点击 %s 链接，等待新验证码...\n", linkText)
+							time.Sleep(3 * time.Second)
+							break
+						}
+					}
+
+					// 点击 Resend 后再检查邮箱
+					if br.webMailClient != nil && br.webMailClient.page != nil {
+						Println("使用 WebMail 等待新验证码...")
+						for retry := 0; retry < 30; retry++ {
+							verifyLink, err := br.webMailClient.CheckEmailSkipUsed(email, br.usedOTPs)
+							if err == nil && verifyLink != "" {
+								if strings.HasPrefix(verifyLink, "OTP:") {
+									otp = strings.TrimPrefix(verifyLink, "OTP:")
+									Printf("WebMail 获取到验证码: %s\n", otp)
+									break
+								}
+							}
+							Printf("等待新验证码... (%d/30)\n", retry+1)
+							time.Sleep(5 * time.Second)
+						}
+					} else if br.httpClient != nil {
+						Println("使用 HTTP API 等待新验证码...")
+						for retry := 0; retry < 30; retry++ {
+							verifyLink, err := br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
+							if err == nil && verifyLink != "" {
+								if strings.HasPrefix(verifyLink, "OTP:") {
+									otp = strings.TrimPrefix(verifyLink, "OTP:")
+									Printf("HTTP API 获取到验证码: %s\n", otp)
+									break
+								}
+							}
+							Printf("等待新验证码... (%d/30)\n", retry+1)
+							time.Sleep(5 * time.Second)
+						}
 					}
 				}
 
@@ -516,7 +557,6 @@ func (br *BrowserRegisterOAuth) handleOAuthLogin(page *rod.Page, email, password
 
 				if otp != "" {
 					Printf("输入 OTP: %s\n", otp)
-					// 重新查找 OTP 输入框，因为点击 Resend 后页面可能已重新渲染
 					otpInputFresh, _ := page.Timeout(5 * time.Second).Element("input[type='text']")
 					if otpInputFresh != nil {
 						_ = otpInputFresh.Timeout(5 * time.Second).Input(otp)
@@ -897,10 +937,14 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 		var autoVerifyLink string
 		var err error
 
-		if br.webMailClient != nil {
+		// Use WebMail client for email checking if available (keeps browser open)
+		// Otherwise fall back to HTTP API
+		if br.webMailClient != nil && br.webMailClient.page != nil {
 			autoVerifyLink, err = br.webMailClient.CheckEmailSkipUsed(email, br.usedOTPs)
-		} else {
+		} else if br.httpClient != nil {
 			autoVerifyLink, err = br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
+		} else {
+			autoVerifyLink, err = "", fmt.Errorf("no email client available")
 		}
 
 		if err == nil && autoVerifyLink != "" {
