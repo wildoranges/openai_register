@@ -687,28 +687,59 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 		if strings.Contains(currentURL, "add-phone") {
 			Println("检测到 add-phone 页面，尝试跳过手机验证...")
 
-			skipBtn, _ := page.Timeout(2 * time.Second).Element("button[data-testid='skip-button']")
-			if skipBtn != nil {
-				Println("点击 Skip 按钮...")
-				skipBtn.MustClick()
-				time.Sleep(2 * time.Second)
-				continue
+			br.saveDebugScreenshot(page, "add_phone_page")
+
+			// 尝试各种跳过按钮
+			skipSelectors := []string{
+				"button[data-testid='skip-button']",
+				"button[aria-label*='skip' i]",
+				"button[aria-label*='later' i]",
+				"a[href*='skip']",
+			}
+			for _, sel := range skipSelectors {
+				skipBtn, _ := page.Timeout(1 * time.Second).Element(sel)
+				if skipBtn != nil {
+					Println("点击跳过按钮: " + sel)
+					skipBtn.MustClick()
+					time.Sleep(2 * time.Second)
+					continue
+				}
 			}
 
-			if br.clickElementByText(page, "button", "Skip") {
-				Println("点击 Skip 按钮 (by text)...")
-				time.Sleep(2 * time.Second)
-				continue
-			}
-
-			for _, skipText := range []string{"Do this later", "Not now", "Skip for now", "稍后", "跳过"} {
+			skipTexts := []string{"Skip", "Do this later", "Not now", "Skip for now", "稍后", "跳过", "Maybe later", "Remind me later", "Not ready"}
+			skipped := false
+			for _, skipText := range skipTexts {
 				if br.clickElementByText(page, "button", skipText) {
 					Printf("点击 %s 按钮...\n", skipText)
 					time.Sleep(2 * time.Second)
+					skipped = true
 					break
 				}
 			}
 
+			// 尝试点击链接形式的跳过
+			for _, skipText := range skipTexts {
+				if br.clickElementByText(page, "a", skipText) {
+					Printf("点击 %s 链接...\n", skipText)
+					time.Sleep(2 * time.Second)
+					skipped = true
+					break
+				}
+			}
+
+			if skipped {
+				continue
+			}
+
+			// 无法跳过，尝试直接导航到 chatgpt.com 获取 session
+			if i > 5 {
+				Println("无法跳过手机验证，尝试直接获取 session token...")
+				page.MustNavigate("https://chatgpt.com/")
+				time.Sleep(3 * time.Second)
+				return nil
+			}
+
+			// 尝试直接提交空手机号
 			phoneInput, _ := page.Timeout(1 * time.Second).Element("input[type='tel']")
 			if phoneInput != nil {
 				Println("找到手机输入框，尝试直接提交...")
@@ -719,7 +750,6 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 				}
 			}
 
-			br.saveDebugScreenshot(page, "add_phone_page")
 			continue
 		}
 
@@ -746,22 +776,173 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 				birthdate := fmt.Sprintf("%d-01-15", year)
 				Printf("设置生日: %s\n", birthdate)
 
-				result := page.MustEval(fmt.Sprintf(`() => {
-					const input = document.querySelector('input[name="birthday"]');
-					if (input) {
-						const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-						nativeInputValueSetter.call(input, '%s');
-						input.dispatchEvent(new Event('input', {bubbles: true}));
-						input.dispatchEvent(new Event('change', {bubbles: true}));
-						return {success: true, value: input.value};
-					}
-					return {success: false, error: 'birthday input not found'};
-				}`, birthdate))
-				Printf("设置生日结果: %v\n", result)
+				// 检测是否有 React Aria DateField (有 data-type 属性的 segment)
+				hasDateSegments := page.MustEval(`() => {
+					return document.querySelector('[data-type="month"]') !== null ||
+						   document.querySelector('[data-type="day"]') !== null ||
+						   document.querySelector('[data-type="year"]') !== null;
+				}`).Bool()
+
+				if hasDateSegments {
+					Printf("检测到 React Aria DateField，使用正确的事件序列设置日期\n")
+
+					// 设置 month segment
+					_ = page.MustEval(`() => {
+						const el = document.querySelector('[data-type="month"]');
+						if (!el) return;
+						el.focus();
+						const range = document.createRange();
+						range.selectNodeContents(el);
+						const sel = window.getSelection();
+						sel.removeAllRanges();
+						sel.addRange(range);
+						const value = '01';
+						for (let i = 0; i < value.length; i++) {
+							const char = value[i];
+							const beforeInputEvent = new InputEvent('beforeinput', {
+								bubbles: true, cancelable: true, data: char, inputType: 'insertText'
+							});
+							el.dispatchEvent(beforeInputEvent);
+							if (i === 0) { el.textContent = char; } else { el.textContent += char; }
+							const inputEvent = new InputEvent('input', {
+								bubbles: true, data: char, inputType: 'insertText'
+							});
+							el.dispatchEvent(inputEvent);
+						}
+						el.dispatchEvent(new Event('change', {bubbles: true}));
+					}`)
+					time.Sleep(150 * time.Millisecond)
+
+					// 设置 day segment
+					_ = page.MustEval(`() => {
+						const el = document.querySelector('[data-type="day"]');
+						if (!el) return;
+						el.focus();
+						const range = document.createRange();
+						range.selectNodeContents(el);
+						const sel = window.getSelection();
+						sel.removeAllRanges();
+						sel.addRange(range);
+						const value = '15';
+						for (let i = 0; i < value.length; i++) {
+							const char = value[i];
+							const beforeInputEvent = new InputEvent('beforeinput', {
+								bubbles: true, cancelable: true, data: char, inputType: 'insertText'
+							});
+							el.dispatchEvent(beforeInputEvent);
+							if (i === 0) { el.textContent = char; } else { el.textContent += char; }
+							const inputEvent = new InputEvent('input', {
+								bubbles: true, data: char, inputType: 'insertText'
+							});
+							el.dispatchEvent(inputEvent);
+						}
+						el.dispatchEvent(new Event('change', {bubbles: true}));
+					}`)
+					time.Sleep(150 * time.Millisecond)
+
+					// 设置 year segment
+					yearStr := fmt.Sprintf("%d", year)
+					_ = page.MustEval(fmt.Sprintf(`() => {
+						const el = document.querySelector('[data-type="year"]');
+						if (!el) return;
+						el.focus();
+						const range = document.createRange();
+						range.selectNodeContents(el);
+						const sel = window.getSelection();
+						sel.removeAllRanges();
+						sel.addRange(range);
+						const value = '%s';
+						for (let i = 0; i < value.length; i++) {
+							const char = value[i];
+							const beforeInputEvent = new InputEvent('beforeinput', {
+								bubbles: true, cancelable: true, data: char, inputType: 'insertText'
+							});
+							el.dispatchEvent(beforeInputEvent);
+							if (i === 0) { el.textContent = char; } else { el.textContent += char; }
+							const inputEvent = new InputEvent('input', {
+								bubbles: true, data: char, inputType: 'insertText'
+							});
+							el.dispatchEvent(inputEvent);
+						}
+						el.dispatchEvent(new Event('change', {bubbles: true}));
+					}`, yearStr))
+					time.Sleep(150 * time.Millisecond)
+
+					// 同时设置 hidden input 以确保值同步
+					_ = page.MustEval(fmt.Sprintf(`() => {
+						const hiddenInput = document.querySelector('input[name="birthday"]');
+						if (hiddenInput) {
+							const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+							setter.call(hiddenInput, '%s');
+							hiddenInput.dispatchEvent(new Event('input', {bubbles: true}));
+							hiddenInput.dispatchEvent(new Event('change', {bubbles: true}));
+						}
+					}`, birthdate))
+
+					// 验证日期是否正确设置
+					result := page.MustEval(`() => {
+						const monthSegment = document.querySelector('[data-type="month"]');
+						const daySegment = document.querySelector('[data-type="day"]');
+						const yearSegment = document.querySelector('[data-type="year"]');
+						const hiddenInput = document.querySelector('input[name="birthday"]');
+						return {
+							month: monthSegment ? monthSegment.textContent : 'N/A',
+							day: daySegment ? daySegment.textContent : 'N/A',
+							year: yearSegment ? yearSegment.textContent : 'N/A',
+							hiddenValue: hiddenInput ? hiddenInput.value : 'N/A'
+						};
+					}`)
+					Printf("设置日期结果: %v\n", result)
+				} else {
+					// 回退到简单 input 方式
+					Printf("使用简单 input 方式设置日期\n")
+					result := page.MustEval(fmt.Sprintf(`() => {
+						const input = document.querySelector('input[name="birthday"]');
+						if (input) {
+							const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+							nativeInputValueSetter.call(input, '%s');
+							input.dispatchEvent(new Event('input', {bubbles: true}));
+							input.dispatchEvent(new Event('change', {bubbles: true}));
+							return {success: true, value: input.value};
+						}
+						return {success: false, error: 'birthday input not found'};
+					}`, birthdate))
+					Printf("设置生日结果: %v\n", result)
+				}
 
 				time.Sleep(500 * time.Millisecond)
 
-				Println("尝试通过 API 提交...")
+				br.saveDebugScreenshot(page, "about_you_before_submit")
+
+				Println("先尝试点击 Finish creating account 按钮...")
+				clicked := false
+				if br.clickElementByText(page, "button", "Finish creating account") {
+					Println("已点击 Finish creating account")
+					clicked = true
+					time.Sleep(3 * time.Second)
+				}
+
+				if !clicked {
+					submitBtn, _ := page.Timeout(1 * time.Second).Element("button[type='submit']")
+					if submitBtn != nil {
+						disabled, _ := submitBtn.Eval(`() => this.disabled`)
+						if !disabled.Value.Bool() {
+							Println("点击 Submit 按钮...")
+							submitBtn.MustClick()
+							clicked = true
+							time.Sleep(3 * time.Second)
+						}
+					}
+				}
+
+				currentURL := page.MustEval("() => window.location.href").String()
+				if clicked && !strings.Contains(currentURL, "about-you") {
+					Printf("页面已跳转: %s\n", currentURL)
+					step = 2
+					continue
+				}
+
+				Println("按钮点击未跳转，尝试 API 提交...")
 				apiResult := page.MustEval(fmt.Sprintf(`() => {
 					return fetch('https://auth.openai.com/api/accounts/create_account', {
 						method: 'POST',
@@ -781,12 +962,23 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 
 				bodyStr := apiResult.Get("body").String()
 				if !apiResult.Get("ok").Bool() {
+					br.saveDebugScreenshot(page, "about_you_api_failed")
+					htmlPath := fmt.Sprintf("debug_about_you_api_failed_%d.html", time.Now().Unix())
+					if html, err := page.HTML(); err == nil {
+						os.WriteFile(htmlPath, []byte(html), 0644)
+						Printf("已保存页面 HTML: %s\n", htmlPath)
+					}
+
 					if strings.Contains(bodyStr, "unsupported_email") || strings.Contains(bodyStr, "not supported") {
 						Println("❌ 邮箱不被 OpenAI 支持，跳过该账号")
 						return ErrUnsupportedEmail
 					}
 					if strings.Contains(bodyStr, "user_already_exists") || strings.Contains(bodyStr, "already exists") {
 						Println("⚠️ 账号已存在，需要登录")
+						return ErrUserAlreadyExists
+					}
+					if strings.Contains(bodyStr, "registration_disallowed") {
+						Println("⚠️ 注册被阻止，尝试登录...")
 						return ErrUserAlreadyExists
 					}
 				}
@@ -803,18 +995,6 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 						time.Sleep(3 * time.Second)
 						step = 2
 						continue
-					}
-				}
-
-				time.Sleep(2 * time.Second)
-
-				submitBtn, _ := page.Timeout(1 * time.Second).Element("button[type='submit']")
-				if submitBtn != nil {
-					disabled, _ := submitBtn.Eval(`() => this.disabled`)
-					if !disabled.Value.Bool() {
-						Println("点击 Submit 按钮...")
-						submitBtn.MustClick()
-						time.Sleep(2 * time.Second)
 					}
 				}
 

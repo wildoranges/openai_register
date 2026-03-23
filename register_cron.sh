@@ -38,7 +38,7 @@ echo "========================================" | tee -a $LOG_FILE
 # config_cron.json 已配置 count: 100
 # xvfb-run 为 Linux 服务器提供虚拟 X server
 # timeout 4小时 (14400秒)
-xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 14400 ./openai-register --config ./config_cron.json >> $LOG_FILE 2>&1
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 14400 ./openai-register --config ./config_cron.json --debug >> $LOG_FILE 2>&1
 
 echo "" | tee -a $LOG_FILE
 echo "========================================" | tee -a $LOG_FILE

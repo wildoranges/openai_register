@@ -22,6 +22,19 @@ type Credential struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+// AuthJSON auth.json 格式（单账户）
+type AuthJSON struct {
+	AuthMode     string `json:"auth_mode"`
+	OPENAIAPIKey string `json:"OPENAI_API_KEY"`
+	Tokens       struct {
+		IDToken      string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		AccountID    string `json:"account_id"`
+	} `json:"tokens"`
+	LastRefresh string `json:"last_refresh"`
+}
+
 // CLIProxyCredential CLIProxyAPI 要求的凭证格式
 type CLIProxyCredential struct {
 	IDToken      string `json:"id_token"`
@@ -36,8 +49,9 @@ type CLIProxyCredential struct {
 
 // JWTPayload JWT payload 结构
 type JWTPayload struct {
-	Exp   int64 `json:"exp"`
-	Iat   int64 `json:"iat"`
+	Exp   int64  `json:"exp"`
+	Iat   int64  `json:"iat"`
+	Email string `json:"email"`
 	Auth  struct {
 		AccountID string `json:"chatgpt_account_id"`
 	} `json:"https://api.openai.com/auth"`
@@ -51,7 +65,7 @@ func decodeJWTPayload(token string) (*JWTPayload, error) {
 	}
 
 	payload := parts[1]
-	
+
 	// 添加必要的 padding
 	if l := len(payload) % 4; l > 0 {
 		payload += strings.Repeat("=", 4-l)
@@ -74,30 +88,83 @@ func decodeJWTPayload(token string) (*JWTPayload, error) {
 	return &jwtPayload, nil
 }
 
+// detectFormat 检测输入文件格式
+func detectFormat(data []byte) (string, error) {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(data, &arr); err == nil {
+		return "array", nil
+	}
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(data, &obj); err == nil {
+		if _, ok := obj["tokens"]; ok {
+			return "auth_json", nil
+		}
+		return "", fmt.Errorf("未知对象格式")
+	}
+	return "", fmt.Errorf("无法解析 JSON")
+}
+
+// parseAuthJSON 解析 auth.json 格式
+func parseAuthJSON(data []byte) (*Credential, error) {
+	var auth AuthJSON
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return nil, fmt.Errorf("JSON 解析失败: %v", err)
+	}
+
+	cred := &Credential{
+		AccessToken:  auth.Tokens.AccessToken,
+		RefreshToken: auth.Tokens.RefreshToken,
+		IDToken:      auth.Tokens.IDToken,
+		UserID:       auth.Tokens.AccountID,
+		CreatedAt:    auth.LastRefresh,
+	}
+
+	// 从 id_token 提取 email
+	if auth.Tokens.IDToken != "" {
+		if payload, err := decodeJWTPayload(auth.Tokens.IDToken); err == nil && payload.Email != "" {
+			cred.Email = payload.Email
+		}
+	}
+
+	return cred, nil
+}
+
 // convertCredentials 转换凭证格式
 func convertCredentials(inputFile, outputDir string) (int, error) {
-	// 读取输入文件
 	data, err := os.ReadFile(inputFile)
 	if err != nil {
 		return 0, fmt.Errorf("读取文件失败: %v", err)
 	}
 
-	// 解析 JSON
+	format, err := detectFormat(data)
+	if err != nil {
+		return 0, fmt.Errorf("格式检测失败: %v", err)
+	}
+
 	var creds []Credential
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return 0, fmt.Errorf("JSON 解析失败: %v", err)
+	switch format {
+	case "array":
+		if err := json.Unmarshal(data, &creds); err != nil {
+			return 0, fmt.Errorf("JSON 解析失败: %v", err)
+		}
+	case "auth_json":
+		cred, err := parseAuthJSON(data)
+		if err != nil {
+			return 0, err
+		}
+		creds = []Credential{*cred}
 	}
 
 	if len(creds) == 0 {
 		return 0, fmt.Errorf("凭证文件为空")
 	}
 
-	// 创建输出目录
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return 0, fmt.Errorf("创建目录失败: %v", err)
 	}
 
-	fmt.Printf("输入文件: %s\n", inputFile)
+	fmt.Printf("输入文件: %s (格式: %s)\n", inputFile, format)
 	fmt.Printf("输出目录: %s\n", outputDir)
 	fmt.Printf("凭证数量: %d\n", len(creds))
 	fmt.Println(strings.Repeat("-", 50))
@@ -120,7 +187,7 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 			fmt.Printf("[%d] 警告 %s: JWT 解码失败: %v\n", i+1, email, err)
 		}
 
-// 构建 CLIProxyAPI 格式
+		// 构建 CLIProxyAPI 格式
 		cliproxyCred := CLIProxyCredential{
 			IDToken:      cred.IDToken,
 			AccessToken:  cred.AccessToken,

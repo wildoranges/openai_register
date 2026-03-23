@@ -46,30 +46,37 @@ var tempMailProviders = []TempMailProvider{
 		Headers: map[string]string{
 			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
 			"Referer":    "https://mail.chatgpt.org.uk",
-			"X-API-Key":  "YOUR_API_KEY",
+			"X-API-Key":  "sk-your-api-key",
 		},
 		Priority: 1,
+	},
+	{
+		Name:        "Mail.gw",
+		GenerateURL: "https://api.mail.gw/domains",
+		CheckURL:    "https://api.mail.gw/messages",
+		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+		Priority:    2,
 	},
 	{
 		Name:        "Mail.tm",
 		GenerateURL: "https://api.mail.tm/domains",
 		CheckURL:    "https://api.mail.tm/messages",
 		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    2,
+		Priority:    3,
 	},
 	{
 		Name:        "DuckMail",
 		GenerateURL: "https://api.duckmail.sbs/domains",
 		CheckURL:    "https://api.duckmail.sbs/messages",
 		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    3,
+		Priority:    4,
 	},
 	{
 		Name:        "tempmail.plus",
 		GenerateURL: "https://tempmail.plus/api/v1/mail",
 		CheckURL:    "https://tempmail.plus/api/v1/mail/%s",
 		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    4,
+		Priority:    5,
 	},
 }
 
@@ -197,7 +204,7 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 		var err error
 
 		switch provider.Name {
-		case "Mail.tm":
+		case "Mail.gw", "Mail.tm":
 			email, err = c.getMailTmEmail(provider)
 		case "DuckMail":
 			email, err = c.getDuckMailEmail(provider)
@@ -224,46 +231,56 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 
 // getMailTmEmail 从 Mail.tm 获取邮箱
 func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
-	// 获取可用域名
+	baseURL := strings.TrimSuffix(provider.GenerateURL, "/domains")
+
 	resp, err := c.client.Get(provider.GenerateURL)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	var domainsResp struct {
-		Data []struct {
+	body, _ := io.ReadAll(resp.Body)
+	Printf("[%s] API响应: %s\n", provider.Name, string(body)[:min(200, len(body))])
+
+	var domains []string
+
+	var hydraResp struct {
+		Members []struct {
 			Domain string `json:"domain"`
 		} `json:"hydra:member"`
 	}
+	if err := json.Unmarshal(body, &hydraResp); err == nil && len(hydraResp.Members) > 0 {
+		for _, m := range hydraResp.Members {
+			domains = append(domains, m.Domain)
+		}
+	}
 
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &domainsResp); err != nil {
-		// 尝试另一种格式
+	if len(domains) == 0 {
 		var altResp struct {
 			Data []struct {
 				Domain string `json:"domain"`
 			} `json:"data"`
 		}
-		if json.Unmarshal(body, &altResp); len(altResp.Data) == 0 {
-			return "", fmt.Errorf("获取域名失败")
+		if json.Unmarshal(body, &altResp); len(altResp.Data) > 0 {
+			for _, d := range altResp.Data {
+				domains = append(domains, d.Domain)
+			}
 		}
-		domainsResp.Data = altResp.Data
 	}
 
-	if len(domainsResp.Data) == 0 {
-		return "", fmt.Errorf("没有可用域名")
+	if len(domains) == 0 {
+		return "", fmt.Errorf("获取域名失败")
 	}
 
-	domain := domainsResp.Data[0].Domain
+	domain := domains[0]
 	address := fmt.Sprintf("%s@%s", randomString(10), domain)
 	password := "TempPass" + randomString(8) + "!"
 
-	// 创建账户
 	createReq := map[string]string{"address": address, "password": password}
 	createBody, _ := json.Marshal(createReq)
 
-	req, _ := http.NewRequest("POST", "https://api.mail.tm/accounts", strings.NewReader(string(createBody)))
+	accountsURL := baseURL + "/accounts"
+	req, _ := http.NewRequest("POST", accountsURL, strings.NewReader(string(createBody)))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp2, err := c.client.Do(req)
@@ -276,15 +293,15 @@ func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
 		return "", fmt.Errorf("创建账户失败: %d", resp2.StatusCode)
 	}
 
-	// 保存账户信息用于后续邮件检查
 	currentMailService = &MailService{
-		Name:   "Mail.tm",
-		Email:  address,
-		Domain: domain,
+		Name:    provider.Name,
+		Email:   address,
+		Domain:  domain,
+		BaseURL: baseURL,
 	}
 	c.setMailTmPassword(password)
 
-	Printf("[Mail.tm] 已创建账户: %s\n", address)
+	Printf("[%s] 已创建账户: %s\n", provider.Name, address)
 	return address, nil
 }
 
@@ -434,16 +451,22 @@ func (c *HTTPClient) getGenericEmail(provider TempMailProvider) (string, error) 
 }
 
 type MailService struct {
-	Name   string
-	Email  string
-	Token  string
-	Domain string
+	Name    string
+	Email   string
+	Token   string
+	Domain  string
+	BaseURL string
 }
 
 var currentMailService *MailService
 
 // CheckEmail 检查邮件（轮询所有服务）
 func (c *HTTPClient) CheckEmail(email string) (string, error) {
+	return c.CheckEmailSkipUsed(email, nil)
+}
+
+// CheckEmailSkipUsed 检查邮件，跳过已使用的OTP
+func (c *HTTPClient) CheckEmailSkipUsed(email string, usedOTPs map[string]bool) (string, error) {
 	maxRetries := 30
 
 	parts := strings.Split(email, "@")
@@ -454,19 +477,19 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 	Printf("📬 检查邮箱: %s (login=%s, domain=%s)\n", email, login, domain)
 
 	for i := 0; i < maxRetries; i++ {
-		if currentMailService != nil && currentMailService.Name == "Mail.tm" {
-			if link := c.checkMailTm(); link != "" {
+		if currentMailService != nil && (currentMailService.Name == "Mail.tm" || currentMailService.Name == "Mail.gw") {
+			if link := c.checkMailTmSkipUsed(usedOTPs); link != "" {
 				return link, nil
 			}
 		}
 		if currentMailService != nil && currentMailService.Name == "DuckMail" {
-			if link := c.checkDuckMail(); link != "" {
+			if link := c.checkDuckMailSkipUsed(usedOTPs); link != "" {
 				return link, nil
 			}
 		}
 
 		for _, provider := range tempMailProviders {
-			if provider.Name == "Mail.tm" || provider.Name == "DuckMail" {
+			if provider.Name == "Mail.tm" || provider.Name == "Mail.gw" || provider.Name == "DuckMail" {
 				continue
 			}
 
@@ -474,7 +497,7 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 			if provider.CheckURL != "" {
 				if strings.Contains(provider.CheckURL, "%s") {
 					apiURL := fmt.Sprintf(provider.CheckURL, url.QueryEscape(email))
-					link = c.checkGenericMail(provider, apiURL)
+					link = c.checkGenericMailSkipUsed(provider, apiURL, usedOTPs)
 				}
 			}
 
@@ -498,6 +521,10 @@ func (c *HTTPClient) CheckEmail(email string) (string, error) {
 
 // checkMailTm 检查 Mail.tm 邮件
 func (c *HTTPClient) checkMailTm() string {
+	return c.checkMailTmSkipUsed(nil)
+}
+
+func (c *HTTPClient) checkMailTmSkipUsed(usedOTPs map[string]bool) string {
 	if currentMailService == nil || currentMailService.Email == "" {
 		return ""
 	}
@@ -514,7 +541,7 @@ func (c *HTTPClient) checkMailTm() string {
 
 	messages := c.getMailTmMessages(token)
 	for _, msg := range messages {
-		if link := c.checkMailTmMessage(token, msg.ID); link != "" {
+		if link := c.checkMailTmMessageSkipUsed(token, msg.ID, usedOTPs); link != "" {
 			return link
 		}
 	}
@@ -522,10 +549,14 @@ func (c *HTTPClient) checkMailTm() string {
 }
 
 func (c *HTTPClient) getMailTmToken(email, password string) string {
+	if currentMailService == nil || currentMailService.BaseURL == "" {
+		return ""
+	}
+	tokenURL := currentMailService.BaseURL + "/token"
 	reqBody := map[string]string{"address": email, "password": password}
 	body, _ := json.Marshal(reqBody)
 
-	req, err := http.NewRequest("POST", "https://api.mail.tm/token", strings.NewReader(string(body)))
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(string(body)))
 	if err != nil {
 		return ""
 	}
@@ -551,7 +582,11 @@ func (c *HTTPClient) getMailTmMessages(token string) []struct {
 	ID      string `json:"id"`
 	Subject string `json:"subject"`
 } {
-	req, err := http.NewRequest("GET", "https://api.mail.tm/messages", nil)
+	if currentMailService == nil || currentMailService.BaseURL == "" {
+		return nil
+	}
+	messagesURL := currentMailService.BaseURL + "/messages"
+	req, err := http.NewRequest("GET", messagesURL, nil)
 	if err != nil {
 		return nil
 	}
@@ -573,7 +608,15 @@ func (c *HTTPClient) getMailTmMessages(token string) []struct {
 }
 
 func (c *HTTPClient) checkMailTmMessage(token, messageID string) string {
-	req, err := http.NewRequest("GET", "https://api.mail.tm/messages/"+messageID, nil)
+	return c.checkMailTmMessageSkipUsed(token, messageID, nil)
+}
+
+func (c *HTTPClient) checkMailTmMessageSkipUsed(token, messageID string, usedOTPs map[string]bool) string {
+	if currentMailService == nil || currentMailService.BaseURL == "" {
+		return ""
+	}
+	messageURL := currentMailService.BaseURL + "/messages/" + messageID
+	req, err := http.NewRequest("GET", messageURL, nil)
 	if err != nil {
 		return ""
 	}
@@ -596,10 +639,14 @@ func (c *HTTPClient) checkMailTmMessage(token, messageID string) string {
 		return ""
 	}
 
-	return c.checkMailContent(msg.Subject, msg.HTML, msg.Text, "")
+	return c.checkMailContentSkipUsed(msg.Subject, msg.HTML, msg.Text, "", usedOTPs)
 }
 
 func (c *HTTPClient) checkDuckMail() string {
+	return c.checkDuckMailSkipUsed(nil)
+}
+
+func (c *HTTPClient) checkDuckMailSkipUsed(usedOTPs map[string]bool) string {
 	if currentMailService == nil || currentMailService.Email == "" {
 		return ""
 	}
@@ -616,7 +663,7 @@ func (c *HTTPClient) checkDuckMail() string {
 
 	messages := c.getDuckMailMessages(token)
 	for _, msg := range messages {
-		if link := c.checkDuckMailMessage(token, msg.ID); link != "" {
+		if link := c.checkDuckMailMessageSkipUsed(token, msg.ID, usedOTPs); link != "" {
 			return link
 		}
 	}
@@ -675,6 +722,10 @@ func (c *HTTPClient) getDuckMailMessages(token string) []struct {
 }
 
 func (c *HTTPClient) checkDuckMailMessage(token, messageID string) string {
+	return c.checkDuckMailMessageSkipUsed(token, messageID, nil)
+}
+
+func (c *HTTPClient) checkDuckMailMessageSkipUsed(token, messageID string, usedOTPs map[string]bool) string {
 	req, err := http.NewRequest("GET", "https://api.duckmail.sbs/messages/"+messageID, nil)
 	if err != nil {
 		return ""
@@ -703,11 +754,15 @@ func (c *HTTPClient) checkDuckMailMessage(token, messageID string) string {
 		htmlContent = msg.HTML[0]
 	}
 
-	return c.checkMailContent(msg.Subject, htmlContent, msg.Text, "")
+	return c.checkMailContentSkipUsed(msg.Subject, htmlContent, msg.Text, "", usedOTPs)
 }
 
 // checkGenericMail 通用邮件检查
 func (c *HTTPClient) checkGenericMail(provider TempMailProvider, apiURL string) string {
+	return c.checkGenericMailSkipUsed(provider, apiURL, nil)
+}
+
+func (c *HTTPClient) checkGenericMailSkipUsed(provider TempMailProvider, apiURL string, usedOTPs map[string]bool) string {
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return ""
@@ -746,7 +801,7 @@ func (c *HTTPClient) checkGenericMail(provider TempMailProvider, apiURL string) 
 		}
 		if json.Unmarshal(body, &directEmails) == nil {
 			for _, mail := range directEmails {
-				if link := c.checkMailContent(mail.Subject, mail.HtmlContent, mail.Content, mail.Body); link != "" {
+				if link := c.checkMailContentSkipUsed(mail.Subject, mail.HtmlContent, mail.Content, mail.Body, usedOTPs); link != "" {
 					return link
 				}
 			}
@@ -755,7 +810,7 @@ func (c *HTTPClient) checkGenericMail(provider TempMailProvider, apiURL string) 
 	}
 
 	for _, mail := range response.Data.Emails {
-		if link := c.checkMailContent(mail.Subject, mail.HtmlContent, mail.Content, mail.Body); link != "" {
+		if link := c.checkMailContentSkipUsed(mail.Subject, mail.HtmlContent, mail.Content, mail.Body, usedOTPs); link != "" {
 			return link
 		}
 	}
@@ -764,6 +819,10 @@ func (c *HTTPClient) checkGenericMail(provider TempMailProvider, apiURL string) 
 }
 
 func (c *HTTPClient) checkMailContent(subject, htmlContent, content, body string) string {
+	return c.checkMailContentSkipUsed(subject, htmlContent, content, body, nil)
+}
+
+func (c *HTTPClient) checkMailContentSkipUsed(subject, htmlContent, content, body string, usedOTPs map[string]bool) string {
 	subjectLower := strings.ToLower(subject)
 	if strings.Contains(subjectLower, "verify") ||
 		strings.Contains(subjectLower, "openai") ||
@@ -780,17 +839,27 @@ func (c *HTTPClient) checkMailContent(subject, htmlContent, content, body string
 		}
 
 		Printf("📧 找到验证邮件: %s\n", subject)
-		if link := extractVerifyLink(fullContent); link != "" {
+		link := extractVerifyLinkSkipUsed(fullContent, usedOTPs)
+		if link != "" {
 			Printf("✅ 提取到验证链接: %s\n", link)
 			return link
 		}
+		Printf("  邮件中的验证码已使用，继续查找...\n")
 	}
 	return ""
 }
 
 func extractVerifyLink(content string) string {
+	return extractVerifyLinkSkipUsed(content, nil)
+}
+
+func extractVerifyLinkSkipUsed(content string, usedOTPs map[string]bool) string {
 	if otp := extractOTPCode(content); otp != "" {
-		return "OTP:" + otp
+		if usedOTPs != nil && usedOTPs[otp] {
+			Printf("  跳过已使用的OTP: %s\n", otp)
+		} else {
+			return "OTP:" + otp
+		}
 	}
 
 	patterns := []string{

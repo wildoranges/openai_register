@@ -22,6 +22,10 @@ type GmailOAuthClient struct {
 }
 
 func NewGmailOAuthClientWithCredential(cred *GmailCredential) (*GmailOAuthClient, error) {
+	if cred == nil {
+		return nil, fmt.Errorf("Gmail credential is nil")
+	}
+
 	ctx := context.Background()
 
 	config := &oauth2.Config{

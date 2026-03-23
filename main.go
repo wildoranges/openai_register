@@ -181,7 +181,14 @@ func main() {
 			}
 
 			httpClient := NewHTTPClientWithProxy(currentProxy)
-			brOAuth := NewBrowserRegisterOAuthWithProxy(config, currentProxy)
+
+			var smsClient *SMSActivateClient
+			if config.SMSActivate.Enabled && config.SMSActivate.APIKey != "" {
+				smsClient = NewSMSActivateClient(config.SMSActivate.APIKey)
+				Printf("HeroSMS 已启用，API Key: %s...\n", config.SMSActivate.APIKey[:10])
+			}
+
+			brOAuth := NewBrowserRegisterOAuthWithSMS(config, currentProxy, smsClient)
 
 			var email, password string
 			var err error
