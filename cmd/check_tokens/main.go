@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -416,7 +418,7 @@ func checkToken(file string) CheckResult {
 			return CheckResult{File: file, Email: email, Status: "error", Message: fmt.Sprintf("写入文件失败: %v", err), CanRefresh: false}
 		}
 
-		validateResult := validateCodexAccess(ctx, tokenResp.AccessToken)
+		validateResult := validateCodexAccess(ctx, tokenResp.AccessToken, cred)
 		if !validateResult.Valid {
 			return CheckResult{
 				File:       file,
@@ -451,8 +453,9 @@ func checkToken(file string) CheckResult {
 	}
 }
 
-func validateCodexAccess(ctx context.Context, accessToken string) ValidateResult {
-	req, err := http.NewRequestWithContext(ctx, "GET", codexModelsURL, nil)
+func validateCodexAccess(ctx context.Context, accessToken string, cred Credential) ValidateResult {
+	apiURL := fmt.Sprintf("%s?client_version=%s", codexModelsURL, codexClientVer)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return ValidateResult{Valid: false, Message: fmt.Sprintf("创建验证请求失败: %v", err), Code: 0}
 	}
@@ -461,6 +464,12 @@ func validateCodexAccess(ctx context.Context, accessToken string) ValidateResult
 	req.Header.Set("Version", codexClientVer)
 	req.Header.Set("User-Agent", codexUserAgent)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Session-Id", uuid.NewString())
+	req.Header.Set("Originator", "codex_cli_rs")
+
+	if accountID, ok := cred["account_id"].(string); ok && accountID != "" {
+		req.Header.Set("Chatgpt-Account-Id", accountID)
+	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
