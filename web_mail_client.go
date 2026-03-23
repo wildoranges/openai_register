@@ -243,7 +243,16 @@ func (w *WebMailClient) CheckEmailSkipUsed(email string, usedOTPs map[string]boo
 
 // openEmailAndGetContent 点击邮件获取完整内容
 func (w *WebMailClient) openEmailAndGetContent(usedOTPs map[string]bool) string {
-	emailLinks, _ := w.page.Elements("a[href*='mail'], li[class*='email'], [class*='message']")
+	defer func() {
+		if r := recover(); r != nil {
+			Printf("  WebMail openEmailAndGetContent panic recovered: %v\n", r)
+		}
+	}()
+
+	emailLinks, err := w.page.Timeout(3 * time.Second).Elements("a[href*='mail'], li[class*='email'], [class*='message']")
+	if err != nil || len(emailLinks) == 0 {
+		return ""
+	}
 	for _, link := range emailLinks {
 		text := link.MustEval("() => this.innerText || this.textContent || ''").String()
 		textLower := strings.ToLower(text)
@@ -255,8 +264,8 @@ func (w *WebMailClient) openEmailAndGetContent(usedOTPs map[string]bool) string 
 			time.Sleep(2 * time.Second)
 
 			content := w.page.MustEval("() => document.body.innerText || document.body.textContent || ''").String()
-			if link := w.extractVerifyLinkSkipUsed(content, usedOTPs); link != "" {
-				return link
+			if verifyLink := w.extractVerifyLinkSkipUsed(content, usedOTPs); verifyLink != "" {
+				return verifyLink
 			}
 
 			w.page.MustEval("() => history.back()")
