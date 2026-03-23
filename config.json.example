@@ -4,14 +4,5 @@
   "timeout": 600,
   "debug": false,
   "output_dir": "creds",
-  "count": 1,
-  "sms_activate": {
-    "enabled": false,
-    "api_key": "YOUR_API_KEY",
-    "service": "go",
-    "country": 6
-  },
-  "gmail_oauth": {
-    "enabled": false
-  }
+  "count": 1
 }

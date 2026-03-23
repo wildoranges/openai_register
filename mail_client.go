@@ -6,78 +6,44 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-// TempMailProvider 临时邮箱服务提供者
-type TempMailProvider struct {
-	Name        string
-	GenerateURL string
-	CheckURL    string
-	Headers     map[string]string
-	Priority    int // 优先级，数字越小优先级越高
+// HTTPClient HTTP客户端
+type HTTPClient struct {
+	client        *http.Client
+	apiKey        string
+	serviceStatus map[string]*ServiceStatus
+	statusMutex   sync.RWMutex
 }
 
 // ServiceStatus 服务状态跟踪
 type ServiceStatus struct {
-	FailCount      int
-	LastFail       time.Time
-	PriorityAdjust int // 优先级调整值，越大优先级越低
-	LastAdjustTime time.Time
+	FailCount int
+	LastFail  time.Time
 }
 
-// HTTPClient HTTP客户端
-type HTTPClient struct {
-	client           *http.Client
-	serviceStatus    map[string]*ServiceStatus
-	statusMutex      sync.RWMutex
-	lastMailProvider string
-	lastMailMutex    sync.RWMutex
-}
+// chatgptOrgUKAPIKey 存储 API Key（可通过环境变量或文件设置）
+var chatgptOrgUKAPIKey string
+var apiKeyOnce sync.Once
 
-// 临时邮箱服务列表（按优先级排序）
-var tempMailProviders = []TempMailProvider{
-	{
-		Name:        "chatgpt.org.uk",
-		GenerateURL: "https://mail.chatgpt.org.uk/api/generate-email?api_key=YOUR_API_KEY",
-		CheckURL:    "https://mail.chatgpt.org.uk/api/emails?api_key=YOUR_API_KEY&email=%s",
-		Headers: map[string]string{
-			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-			"Referer":    "https://mail.chatgpt.org.uk",
-			"X-API-Key":  "sk-your-api-key",
-		},
-		Priority: 1,
-	},
-	{
-		Name:        "Mail.gw",
-		GenerateURL: "https://api.mail.gw/domains",
-		CheckURL:    "https://api.mail.gw/messages",
-		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    2,
-	},
-	{
-		Name:        "Mail.tm",
-		GenerateURL: "https://api.mail.tm/domains",
-		CheckURL:    "https://api.mail.tm/messages",
-		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    3,
-	},
-	{
-		Name:        "DuckMail",
-		GenerateURL: "https://api.duckmail.sbs/domains",
-		CheckURL:    "https://api.duckmail.sbs/messages",
-		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    4,
-	},
-	{
-		Name:        "tempmail.plus",
-		GenerateURL: "https://tempmail.plus/api/v1/mail",
-		CheckURL:    "https://tempmail.plus/api/v1/mail/%s",
-		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-		Priority:    5,
-	},
+func getChatGPTOrgUKAPIKey() string {
+	apiKeyOnce.Do(func() {
+		// 优先从环境变量获取
+		chatgptOrgUKAPIKey = os.Getenv("CHATGPT_ORG_UK_API_KEY")
+		if chatgptOrgUKAPIKey != "" {
+			return
+		}
+		// 其次从 .gptapi 文件获取
+		data, err := os.ReadFile(".gptapi")
+		if err == nil {
+			chatgptOrgUKAPIKey = strings.TrimSpace(string(data))
+		}
+	})
+	return chatgptOrgUKAPIKey
 }
 
 func NewHTTPClient() *HTTPClient {
@@ -103,313 +69,37 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 	}
 }
 
-// getServicePriority 获取服务的动态优先级（原始优先级 + 调整值）
-func (c *HTTPClient) getServicePriority(name string, originalPriority int) int {
-	c.statusMutex.RLock()
-	defer c.statusMutex.RUnlock()
-
-	if status, exists := c.serviceStatus[name]; exists {
-		return originalPriority + status.PriorityAdjust
-	}
-	return originalPriority
-}
-
-// markServiceFailed 标记服务失败，连续3次失败后降低优先级
-func (c *HTTPClient) markServiceFailed(name string) {
-	c.statusMutex.Lock()
-	defer c.statusMutex.Unlock()
-
-	status, exists := c.serviceStatus[name]
-	if !exists {
-		status = &ServiceStatus{}
-		c.serviceStatus[name] = status
-	}
-
-	status.FailCount++
-	status.LastFail = time.Now()
-
-	// 连续失败3次则降低优先级（增加优先级调整值）
-	if status.FailCount >= 3 && status.PriorityAdjust < 10 {
-		status.PriorityAdjust += 1
-		status.LastAdjustTime = time.Now()
-		Printf("[调整] 服务 %s 连续失败 %d 次，优先级降低（当前调整值: +%d）\n", name, status.FailCount, status.PriorityAdjust)
-	}
-}
-
-// markServiceSuccess 标记服务成功，恢复优先级
-func (c *HTTPClient) markServiceSuccess(name string) {
-	c.statusMutex.Lock()
-	defer c.statusMutex.Unlock()
-
-	if status, exists := c.serviceStatus[name]; exists {
-		status.FailCount = 0
-		// 成功后恢复优先级
-		if status.PriorityAdjust > 0 {
-			status.PriorityAdjust = 0
-			Printf("[恢复] 服务 %s 优先级已恢复\n", name)
-		}
-	}
-}
-
-func (c *HTTPClient) setLastMailProvider(name string) {
-	c.lastMailMutex.Lock()
-	defer c.lastMailMutex.Unlock()
-	c.lastMailProvider = name
-}
-
-func (c *HTTPClient) getLastMailProvider() string {
-	c.lastMailMutex.RLock()
-	defer c.lastMailMutex.RUnlock()
-	return c.lastMailProvider
-}
-
-func (c *HTTPClient) SetDefaultHeaders(req *http.Request) {
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-}
-
-// GetTempEmail 获取临时邮箱（按动态优先级轮询）
+// GetTempEmail 获取临时邮箱（仅使用 chatgpt.org.uk）
 func (c *HTTPClient) GetTempEmail() (string, error) {
 	Println("\n📧 正在获取临时邮箱...")
 
-	// 创建服务列表副本并按动态优先级排序
-	type providerWithPriority struct {
-		provider TempMailProvider
-		priority int
-	}
-	var sortedProviders []providerWithPriority
-	for _, p := range tempMailProviders {
-		sortedProviders = append(sortedProviders, providerWithPriority{
-			provider: p,
-			priority: c.getServicePriority(p.Name, p.Priority),
-		})
-	}
+	apiKey := getChatGPTOrgUKAPIKey()
+	var apiURL string
+	var headers map[string]string
 
-	// 按优先级排序（数字越小优先级越高）
-	for i := 0; i < len(sortedProviders); i++ {
-		for j := i + 1; j < len(sortedProviders); j++ {
-			if sortedProviders[j].priority < sortedProviders[i].priority {
-				sortedProviders[i], sortedProviders[j] = sortedProviders[j], sortedProviders[i]
-			}
+	if apiKey != "" {
+		Printf("[chatgpt.org.uk] 使用专属 API Key: %s...\n", apiKey[:min(10, len(apiKey))])
+		apiURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/generate-email?api_key=YOUR_API_KEY", apiKey)
+		headers = map[string]string{
+			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+			"Referer":    "https://mail.chatgpt.org.uk",
+			"X-API-Key":  apiKey,
+		}
+	} else {
+		Println("[chatgpt.org.uk] 使用全球共享配额")
+		apiURL = "https://mail.chatgpt.org.uk/api/generate-email?api_key=YOUR_API_KEY"
+		headers = map[string]string{
+			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+			"Referer":    "https://mail.chatgpt.org.uk",
 		}
 	}
 
-	// 按排序后的顺序遍历所有服务
-	for _, pp := range sortedProviders {
-		provider := pp.provider
-		Printf("[%s] 尝试获取邮箱（优先级: %d）\n", provider.Name, pp.priority)
-
-		var email string
-		var err error
-
-		switch provider.Name {
-		case "Mail.gw", "Mail.tm":
-			email, err = c.getMailTmEmail(provider)
-		case "DuckMail":
-			email, err = c.getDuckMailEmail(provider)
-		default:
-			email, err = c.getGenericEmail(provider)
-		}
-
-		if err != nil {
-			Printf("[%s] 获取失败: %v\n", provider.Name, err)
-			c.markServiceFailed(provider.Name)
-			continue
-		}
-
-		if email != "" {
-			c.markServiceSuccess(provider.Name)
-			c.setLastMailProvider(provider.Name)
-			Printf("[%s] ✅ 获取邮箱成功: %s\n", provider.Name, email)
-			return email, nil
-		}
-	}
-
-	return "", fmt.Errorf("所有临时邮箱服务都不可用")
-}
-
-// getMailTmEmail 从 Mail.tm 获取邮箱
-func (c *HTTPClient) getMailTmEmail(provider TempMailProvider) (string, error) {
-	baseURL := strings.TrimSuffix(provider.GenerateURL, "/domains")
-
-	resp, err := c.client.Get(provider.GenerateURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	Printf("[%s] API响应: %s\n", provider.Name, string(body)[:min(200, len(body))])
-
-	var domains []string
-
-	var hydraResp struct {
-		Members []struct {
-			Domain string `json:"domain"`
-		} `json:"hydra:member"`
-	}
-	if err := json.Unmarshal(body, &hydraResp); err == nil && len(hydraResp.Members) > 0 {
-		for _, m := range hydraResp.Members {
-			domains = append(domains, m.Domain)
-		}
-	}
-
-	if len(domains) == 0 {
-		var altResp struct {
-			Data []struct {
-				Domain string `json:"domain"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(body, &altResp); len(altResp.Data) > 0 {
-			for _, d := range altResp.Data {
-				domains = append(domains, d.Domain)
-			}
-		}
-	}
-
-	if len(domains) == 0 {
-		return "", fmt.Errorf("获取域名失败")
-	}
-
-	domain := domains[0]
-	address := fmt.Sprintf("%s@%s", randomString(10), domain)
-	password := "TempPass" + randomString(8) + "!"
-
-	createReq := map[string]string{"address": address, "password": password}
-	createBody, _ := json.Marshal(createReq)
-
-	accountsURL := baseURL + "/accounts"
-	req, _ := http.NewRequest("POST", accountsURL, strings.NewReader(string(createBody)))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp2, err := c.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp2.Body.Close()
-
-	if resp2.StatusCode != 200 && resp2.StatusCode != 201 {
-		return "", fmt.Errorf("创建账户失败: %d", resp2.StatusCode)
-	}
-
-	currentMailService = &MailService{
-		Name:    provider.Name,
-		Email:   address,
-		Domain:  domain,
-		BaseURL: baseURL,
-	}
-	c.setMailTmPassword(password)
-
-	Printf("[%s] 已创建账户: %s\n", provider.Name, address)
-	return address, nil
-}
-
-func (c *HTTPClient) getDuckMailEmail(provider TempMailProvider) (string, error) {
-	resp, err := c.client.Get(provider.GenerateURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var domainsResp struct {
-		Data []struct {
-			Domain string `json:"domain"`
-		} `json:"hydra:member"`
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &domainsResp); err != nil {
-		var altResp struct {
-			Data []struct {
-				Domain string `json:"domain"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(body, &altResp); len(altResp.Data) == 0 {
-			return "", fmt.Errorf("获取域名失败")
-		}
-		domainsResp.Data = altResp.Data
-	}
-
-	if len(domainsResp.Data) == 0 {
-		return "", fmt.Errorf("没有可用域名")
-	}
-
-	domain := domainsResp.Data[0].Domain
-	address := fmt.Sprintf("%s@%s", randomString(10), domain)
-	password := "DuckPass" + randomString(8) + "!"
-
-	createReq := map[string]interface{}{
-		"address":   address,
-		"password":  password,
-		"expiresIn": 3600000,
-	}
-	createBody, _ := json.Marshal(createReq)
-
-	req, _ := http.NewRequest("POST", "https://api.duckmail.sbs/accounts", strings.NewReader(string(createBody)))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp2, err := c.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp2.Body.Close()
-
-	if resp2.StatusCode != 200 && resp2.StatusCode != 201 {
-		body2, _ := io.ReadAll(resp2.Body)
-		return "", fmt.Errorf("创建账户失败: %d - %s", resp2.StatusCode, string(body2))
-	}
-
-	currentMailService = &MailService{
-		Name:   "DuckMail",
-		Email:  address,
-		Domain: domain,
-	}
-	c.setDuckMailPassword(password)
-
-	Printf("[DuckMail] 已创建账户: %s\n", address)
-	return address, nil
-}
-
-// mailTmPassword 存储 Mail.tm 密码
-var mailTmPassword string
-var mailTmPasswordMutex sync.RWMutex
-
-var duckMailPassword string
-var duckMailPasswordMutex sync.RWMutex
-
-func (c *HTTPClient) setMailTmPassword(password string) {
-	mailTmPasswordMutex.Lock()
-	defer mailTmPasswordMutex.Unlock()
-	mailTmPassword = password
-}
-
-func (c *HTTPClient) getMailTmPassword() string {
-	mailTmPasswordMutex.RLock()
-	defer mailTmPasswordMutex.RUnlock()
-	return mailTmPassword
-}
-
-func (c *HTTPClient) setDuckMailPassword(password string) {
-	duckMailPasswordMutex.Lock()
-	defer duckMailPasswordMutex.Unlock()
-	duckMailPassword = password
-}
-
-func (c *HTTPClient) getDuckMailPassword() string {
-	duckMailPasswordMutex.RLock()
-	defer duckMailPasswordMutex.RUnlock()
-	return duckMailPassword
-}
-
-// getGenericEmail 通用邮箱获取方法
-func (c *HTTPClient) getGenericEmail(provider TempMailProvider) (string, error) {
-	req, err := http.NewRequest("GET", provider.GenerateURL, nil)
+	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return "", err
 	}
 
-	for k, v := range provider.Headers {
+	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
@@ -420,47 +110,39 @@ func (c *HTTPClient) getGenericEmail(provider TempMailProvider) (string, error) 
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	Printf("[%s] API响应: %s\n", provider.Name, string(body)[:min(200, len(body))])
+	Printf("[chatgpt.org.uk] API响应: %s\n", string(body)[:min(200, len(body))])
 
-	// 尝试多种解析格式
-	var result1 struct {
-		Email string `json:"email"`
-	}
-	if json.Unmarshal(body, &result1); result1.Email != "" {
-		return result1.Email, nil
-	}
-
-	var result2 struct {
+	var result struct {
 		Success bool `json:"success"`
 		Data    struct {
 			Email string `json:"email"`
 		} `json:"data"`
-	}
-	if json.Unmarshal(body, &result2); result2.Data.Email != "" {
-		return result2.Data.Email, nil
-	}
-
-	var result3 struct {
-		Mail string `json:"mail"`
-	}
-	if json.Unmarshal(body, &result3); result3.Mail != "" {
-		return result3.Mail, nil
+		Usage struct {
+			RemainingTotal int `json:"remaining_total"`
+		} `json:"usage"`
 	}
 
-	return "", fmt.Errorf("无法解析邮箱")
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	if !result.Success {
+		return "", fmt.Errorf("API 返回失败")
+	}
+
+	if result.Data.Email == "" {
+		return "", fmt.Errorf("未获取到邮箱地址")
+	}
+
+	if result.Usage.RemainingTotal > 0 {
+		Printf("[chatgpt.org.uk] 剩余配额: %d\n", result.Usage.RemainingTotal)
+	}
+
+	Printf("[chatgpt.org.uk] ✅ 获取邮箱成功: %s\n", result.Data.Email)
+	return result.Data.Email, nil
 }
 
-type MailService struct {
-	Name    string
-	Email   string
-	Token   string
-	Domain  string
-	BaseURL string
-}
-
-var currentMailService *MailService
-
-// CheckEmail 检查邮件（轮询所有服务）
+// CheckEmail 检查邮件
 func (c *HTTPClient) CheckEmail(email string) (string, error) {
 	return c.CheckEmailSkipUsed(email, nil)
 }
@@ -473,35 +155,67 @@ func (c *HTTPClient) CheckEmailSkipUsed(email string, usedOTPs map[string]bool) 
 	if len(parts) != 2 {
 		return "", fmt.Errorf("无效的邮箱格式")
 	}
-	login, domain := parts[0], parts[1]
-	Printf("📬 检查邮箱: %s (login=%s, domain=%s)\n", email, login, domain)
+	Printf("📬 检查邮箱: %s\n", email)
+
+	apiKey := getChatGPTOrgUKAPIKey()
+	var checkURL string
+	var headers map[string]string
+
+	if apiKey != "" {
+		checkURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/emails?api_key=YOUR_API_KEY&email=%s", apiKey, url.QueryEscape(email))
+		headers = map[string]string{
+			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+			"Referer":    "https://mail.chatgpt.org.uk",
+			"X-API-Key":  apiKey,
+		}
+	} else {
+		checkURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/emails?api_key=YOUR_API_KEY&email=%s", url.QueryEscape(email))
+		headers = map[string]string{
+			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+			"Referer":    "https://mail.chatgpt.org.uk",
+		}
+	}
 
 	for i := 0; i < maxRetries; i++ {
-		if currentMailService != nil && (currentMailService.Name == "Mail.tm" || currentMailService.Name == "Mail.gw") {
-			if link := c.checkMailTmSkipUsed(usedOTPs); link != "" {
-				return link, nil
-			}
-		}
-		if currentMailService != nil && currentMailService.Name == "DuckMail" {
-			if link := c.checkDuckMailSkipUsed(usedOTPs); link != "" {
-				return link, nil
-			}
+		req, err := http.NewRequest("GET", checkURL, nil)
+		if err != nil {
+			return "", err
 		}
 
-		for _, provider := range tempMailProviders {
-			if provider.Name == "Mail.tm" || provider.Name == "Mail.gw" || provider.Name == "DuckMail" {
-				continue
-			}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
 
-			var link string
-			if provider.CheckURL != "" {
-				if strings.Contains(provider.CheckURL, "%s") {
-					apiURL := fmt.Sprintf(provider.CheckURL, url.QueryEscape(email))
-					link = c.checkGenericMailSkipUsed(provider, apiURL, usedOTPs)
-				}
-			}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			Printf("  ⏳ 请求失败，重试... (%d/%d)\n", i+1, maxRetries)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
 
-			if link != "" {
+		body, _ := io.ReadAll(resp.Body)
+
+		var response struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Emails []struct {
+					Subject     string `json:"subject"`
+					Content     string `json:"content"`
+					HtmlContent string `json:"html_content"`
+					Body        string `json:"body"`
+				} `json:"emails"`
+			} `json:"data"`
+		}
+
+		if err := json.Unmarshal(body, &response); err != nil {
+			Printf("  ⏳ 解析失败，重试... (%d/%d)\n", i+1, maxRetries)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for _, mail := range response.Data.Emails {
+			if link := c.checkMailContentSkipUsed(mail.Subject, mail.HtmlContent, mail.Content, mail.Body, usedOTPs); link != "" {
 				return link, nil
 			}
 		}
@@ -510,316 +224,7 @@ func (c *HTTPClient) CheckEmailSkipUsed(email string, usedOTPs map[string]bool) 
 		time.Sleep(5 * time.Second)
 	}
 
-	provider := c.getLastMailProvider()
-	if provider != "" {
-		c.markServiceFailed(provider)
-		Printf("[超时] 服务 %s 等待验证邮件超时，已标记失败\n", provider)
-	}
-
 	return "", fmt.Errorf("等待验证邮件超时")
-}
-
-// checkMailTm 检查 Mail.tm 邮件
-func (c *HTTPClient) checkMailTm() string {
-	return c.checkMailTmSkipUsed(nil)
-}
-
-func (c *HTTPClient) checkMailTmSkipUsed(usedOTPs map[string]bool) string {
-	if currentMailService == nil || currentMailService.Email == "" {
-		return ""
-	}
-
-	password := c.getMailTmPassword()
-	if password == "" {
-		return ""
-	}
-
-	token := c.getMailTmToken(currentMailService.Email, password)
-	if token == "" {
-		return ""
-	}
-
-	messages := c.getMailTmMessages(token)
-	for _, msg := range messages {
-		if link := c.checkMailTmMessageSkipUsed(token, msg.ID, usedOTPs); link != "" {
-			return link
-		}
-	}
-	return ""
-}
-
-func (c *HTTPClient) getMailTmToken(email, password string) string {
-	if currentMailService == nil || currentMailService.BaseURL == "" {
-		return ""
-	}
-	tokenURL := currentMailService.BaseURL + "/token"
-	reqBody := map[string]string{"address": email, "password": password}
-	body, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(string(body)))
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	respBody, _ := io.ReadAll(resp.Body)
-	if json.Unmarshal(respBody, &result); result.Token != "" {
-		return result.Token
-	}
-	return ""
-}
-
-func (c *HTTPClient) getMailTmMessages(token string) []struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-} {
-	if currentMailService == nil || currentMailService.BaseURL == "" {
-		return nil
-	}
-	messagesURL := currentMailService.BaseURL + "/messages"
-	req, err := http.NewRequest("GET", messagesURL, nil)
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	var messages []struct {
-		ID      string `json:"id"`
-		Subject string `json:"subject"`
-	}
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &messages)
-	return messages
-}
-
-func (c *HTTPClient) checkMailTmMessage(token, messageID string) string {
-	return c.checkMailTmMessageSkipUsed(token, messageID, nil)
-}
-
-func (c *HTTPClient) checkMailTmMessageSkipUsed(token, messageID string, usedOTPs map[string]bool) string {
-	if currentMailService == nil || currentMailService.BaseURL == "" {
-		return ""
-	}
-	messageURL := currentMailService.BaseURL + "/messages/" + messageID
-	req, err := http.NewRequest("GET", messageURL, nil)
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var msg struct {
-		Subject string `json:"subject"`
-		Text    string `json:"text"`
-		HTML    string `json:"html"`
-	}
-	if err := json.Unmarshal(body, &msg); err != nil {
-		return ""
-	}
-
-	return c.checkMailContentSkipUsed(msg.Subject, msg.HTML, msg.Text, "", usedOTPs)
-}
-
-func (c *HTTPClient) checkDuckMail() string {
-	return c.checkDuckMailSkipUsed(nil)
-}
-
-func (c *HTTPClient) checkDuckMailSkipUsed(usedOTPs map[string]bool) string {
-	if currentMailService == nil || currentMailService.Email == "" {
-		return ""
-	}
-
-	password := c.getDuckMailPassword()
-	if password == "" {
-		return ""
-	}
-
-	token := c.getDuckMailToken(currentMailService.Email, password)
-	if token == "" {
-		return ""
-	}
-
-	messages := c.getDuckMailMessages(token)
-	for _, msg := range messages {
-		if link := c.checkDuckMailMessageSkipUsed(token, msg.ID, usedOTPs); link != "" {
-			return link
-		}
-	}
-	return ""
-}
-
-func (c *HTTPClient) getDuckMailToken(email, password string) string {
-	reqBody := map[string]string{"address": email, "password": password}
-	body, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", "https://api.duckmail.sbs/token", strings.NewReader(string(body)))
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	respBody, _ := io.ReadAll(resp.Body)
-	if json.Unmarshal(respBody, &result); result.Token != "" {
-		return result.Token
-	}
-	return ""
-}
-
-func (c *HTTPClient) getDuckMailMessages(token string) []struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-} {
-	req, err := http.NewRequest("GET", "https://api.duckmail.sbs/messages", nil)
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	var messages []struct {
-		ID      string `json:"id"`
-		Subject string `json:"subject"`
-	}
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &messages)
-	return messages
-}
-
-func (c *HTTPClient) checkDuckMailMessage(token, messageID string) string {
-	return c.checkDuckMailMessageSkipUsed(token, messageID, nil)
-}
-
-func (c *HTTPClient) checkDuckMailMessageSkipUsed(token, messageID string, usedOTPs map[string]bool) string {
-	req, err := http.NewRequest("GET", "https://api.duckmail.sbs/messages/"+messageID, nil)
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var msg struct {
-		Subject string   `json:"subject"`
-		Text    string   `json:"text"`
-		HTML    []string `json:"html"`
-	}
-	if err := json.Unmarshal(body, &msg); err != nil {
-		return ""
-	}
-
-	htmlContent := ""
-	if len(msg.HTML) > 0 {
-		htmlContent = msg.HTML[0]
-	}
-
-	return c.checkMailContentSkipUsed(msg.Subject, htmlContent, msg.Text, "", usedOTPs)
-}
-
-// checkGenericMail 通用邮件检查
-func (c *HTTPClient) checkGenericMail(provider TempMailProvider, apiURL string) string {
-	return c.checkGenericMailSkipUsed(provider, apiURL, nil)
-}
-
-func (c *HTTPClient) checkGenericMailSkipUsed(provider TempMailProvider, apiURL string, usedOTPs map[string]bool) string {
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return ""
-	}
-
-	for k, v := range provider.Headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var response struct {
-		Success bool `json:"success"`
-		Data    struct {
-			Emails []struct {
-				Subject     string `json:"subject"`
-				Content     string `json:"content"`
-				HtmlContent string `json:"html_content"`
-				Body        string `json:"body"`
-			} `json:"emails"`
-		} `json:"data"`
-	}
-
-	if err := json.Unmarshal(body, &response); err != nil {
-		var directEmails []struct {
-			Subject     string `json:"subject"`
-			Content     string `json:"content"`
-			HtmlContent string `json:"html_content"`
-			Body        string `json:"body"`
-		}
-		if json.Unmarshal(body, &directEmails) == nil {
-			for _, mail := range directEmails {
-				if link := c.checkMailContentSkipUsed(mail.Subject, mail.HtmlContent, mail.Content, mail.Body, usedOTPs); link != "" {
-					return link
-				}
-			}
-		}
-		return ""
-	}
-
-	for _, mail := range response.Data.Emails {
-		if link := c.checkMailContentSkipUsed(mail.Subject, mail.HtmlContent, mail.Content, mail.Body, usedOTPs); link != "" {
-			return link
-		}
-	}
-
-	return ""
-}
-
-func (c *HTTPClient) checkMailContent(subject, htmlContent, content, body string) string {
-	return c.checkMailContentSkipUsed(subject, htmlContent, content, body, nil)
 }
 
 func (c *HTTPClient) checkMailContentSkipUsed(subject, htmlContent, content, body string, usedOTPs map[string]bool) string {
@@ -847,10 +252,6 @@ func (c *HTTPClient) checkMailContentSkipUsed(subject, htmlContent, content, bod
 		Printf("  邮件中的验证码已使用，继续查找...\n")
 	}
 	return ""
-}
-
-func extractVerifyLink(content string) string {
-	return extractVerifyLinkSkipUsed(content, nil)
 }
 
 func extractVerifyLinkSkipUsed(content string, usedOTPs map[string]bool) string {
@@ -881,18 +282,6 @@ func extractVerifyLinkSkipUsed(content string, usedOTPs map[string]bool) string 
 				return link
 			}
 		}
-	}
-
-	if idx := strings.Index(content, "token="); idx != -1 {
-		start := idx
-		for start > 0 && content[start-1] != '"' && content[start-1] != '\'' && content[start-1] != ' ' {
-			start--
-		}
-		end := idx
-		for end < len(content) && content[end] != '"' && content[end] != '\'' && content[end] != ' ' && content[end] != '<' {
-			end++
-		}
-		return content[start:end]
 	}
 
 	return ""

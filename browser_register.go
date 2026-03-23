@@ -27,7 +27,6 @@ type BrowserRegister struct {
 	browser    *rod.Browser
 	httpClient *HTTPClient
 	config     *Config
-	smsClient  *SMSActivateClient
 }
 
 type BrowserFingerprintProfile struct {
@@ -44,25 +43,17 @@ type BrowserFingerprintProfile struct {
 }
 
 func NewBrowserRegister(config *Config) *BrowserRegister {
-	br := &BrowserRegister{
+	return &BrowserRegister{
 		httpClient: NewHTTPClientWithProxy(config.Proxy),
 		config:     config,
 	}
-	if config.SMSActivate.Enabled && config.SMSActivate.APIKey != "" {
-		br.smsClient = NewSMSActivateClient(config.SMSActivate.APIKey)
-	}
-	return br
 }
 
 func NewBrowserRegisterWithProxy(config *Config, proxyURL string) *BrowserRegister {
-	br := &BrowserRegister{
+	return &BrowserRegister{
 		httpClient: NewHTTPClientWithProxy(proxyURL),
 		config:     config,
 	}
-	if config.SMSActivate.Enabled && config.SMSActivate.APIKey != "" {
-		br.smsClient = NewSMSActivateClient(config.SMSActivate.APIKey)
-	}
-	return br
 }
 
 type Point struct {

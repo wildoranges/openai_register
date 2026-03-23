@@ -84,7 +84,6 @@ func main() {
 		}
 	}
 
-	// 如果指定了邮箱，强制注册数量为 1
 	if specifiedEmail != "" {
 		count = 1
 	}
@@ -181,18 +180,10 @@ func main() {
 			}
 
 			httpClient := NewHTTPClientWithProxy(currentProxy)
-
-			var smsClient *SMSActivateClient
-			if config.SMSActivate.Enabled && config.SMSActivate.APIKey != "" {
-				smsClient = NewSMSActivateClient(config.SMSActivate.APIKey)
-				Printf("HeroSMS 已启用，API Key: %s...\n", config.SMSActivate.APIKey[:10])
-			}
-
-			brOAuth := NewBrowserRegisterOAuthWithSMS(config, currentProxy, smsClient)
+			brOAuth := NewBrowserRegisterOAuth(config, currentProxy)
 
 			var email, password string
 			var err error
-			var aliasGen *GmailAliasGenerator
 
 			if specifiedEmail != "" {
 				email = specifiedEmail
@@ -202,13 +193,6 @@ func main() {
 					password = GeneratePassword()
 				}
 				Printf("使用指定邮箱: %s\n", email)
-				Printf("密码: %s\n", password)
-			} else if config.GmailOAuth.Enabled && config.GmailOAuth.Credential != nil {
-				aliasGen = NewGmailAliasGenerator(config.GmailOAuth.Credential)
-				password = GeneratePassword()
-				email = aliasGen.GenerateAliasWithPassword(password)
-				Printf("生成 Gmail 别名: %s\n", email)
-				Printf("基础邮箱: %s\n", aliasGen.GetBaseEmail())
 				Printf("密码: %s\n", password)
 			} else {
 				email, err = httpClient.GetTempEmail()
@@ -250,25 +234,9 @@ func main() {
 
 				if regErr == ErrUserAlreadyExists {
 					Printf("⚠️ 账号已存在 (注册阶段)，尝试登录获取凭证...\n")
-					loginPassword := password
-					if aliasGen != nil {
-						if storedPassword := aliasGen.GetPasswordForAlias(email); storedPassword != "" {
-							Printf("使用存储的密码登录...\n")
-							loginPassword = storedPassword
-						}
-					}
-					credentials, regErr = brOAuth.LoginWithOAuth(email, loginPassword, specifiedOTP)
+					credentials, regErr = brOAuth.LoginWithOAuth(email, password, specifiedOTP)
 					if regErr == nil {
 						break RETRY_LOOP
-					}
-
-					if (regErr == ErrLoginFailedAliasUsed || regErr == ErrUserAlreadyExists) && aliasGen != nil && attempt < maxAttempts-1 {
-						Printf("⚠️ 别名已被使用，生成新别名重试...\n")
-						password = GeneratePassword()
-						email = aliasGen.GenerateAliasWithPassword(password)
-						Printf("新 Gmail 别名: %s\n", email)
-						Printf("新密码: %s\n", password)
-						continue RETRY_LOOP
 					}
 					Printf("登录失败: %v\n", regErr)
 					break RETRY_LOOP

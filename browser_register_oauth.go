@@ -24,31 +24,13 @@ type BrowserRegisterOAuth struct {
 	*BrowserRegister
 	oauthServer *OAuthCallbackServer
 	usedOTPs    map[string]bool
-	smsClient   *SMSActivateClient
 }
 
-func NewBrowserRegisterOAuth(config *Config) *BrowserRegisterOAuth {
-	return &BrowserRegisterOAuth{
-		BrowserRegister: NewBrowserRegister(config),
-		oauthServer:     NewOAuthCallbackServer(),
-		usedOTPs:        make(map[string]bool),
-	}
-}
-
-func NewBrowserRegisterOAuthWithProxy(config *Config, proxyURL string) *BrowserRegisterOAuth {
+func NewBrowserRegisterOAuth(config *Config, proxyURL string) *BrowserRegisterOAuth {
 	return &BrowserRegisterOAuth{
 		BrowserRegister: NewBrowserRegisterWithProxy(config, proxyURL),
 		oauthServer:     NewOAuthCallbackServer(),
 		usedOTPs:        make(map[string]bool),
-	}
-}
-
-func NewBrowserRegisterOAuthWithSMS(config *Config, proxyURL string, smsClient *SMSActivateClient) *BrowserRegisterOAuth {
-	return &BrowserRegisterOAuth{
-		BrowserRegister: NewBrowserRegisterWithProxy(config, proxyURL),
-		oauthServer:     NewOAuthCallbackServer(),
-		usedOTPs:        make(map[string]bool),
-		smsClient:       smsClient,
 	}
 }
 
@@ -446,8 +428,6 @@ func (br *BrowserRegisterOAuth) handleOAuthLogin(page *rod.Page, email, password
 	br.handleCloudflare(page)
 	br.saveDebugScreenshot(page, "login_05_after_submit")
 
-	loginTime := time.Now()
-
 	currentURL := page.MustEval("() => window.location.href").String()
 	Printf("当前URL: %s\n", currentURL)
 
@@ -491,20 +471,7 @@ func (br *BrowserRegisterOAuth) handleOAuthLogin(page *rod.Page, email, password
 				}
 
 				var otp string
-				if br.config.GmailOAuth.Enabled && br.config.GmailOAuth.Credential != nil {
-					gmailClient, err := NewGmailOAuthClientWithCredential(br.config.GmailOAuth.Credential)
-					if err == nil {
-						Println("使用 Gmail API 等待新验证码...")
-						otp, err = gmailClient.GetOpenAIOTPAfterTime(120*time.Second, br.usedOTPs, loginTime)
-						if err != nil {
-							Println("Gmail API 获取验证码失败")
-						} else {
-							Printf("Gmail API 获取到验证码: %s\n", otp)
-						}
-					}
-				}
-
-				if otp == "" && br.httpClient != nil {
+				if br.httpClient != nil {
 					Println("使用临时邮箱 API 等待新验证码...")
 					for retry := 0; retry < 30; retry++ {
 						verifyLink, err := br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
@@ -768,22 +735,11 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 
 		if strings.Contains(currentURL, "add-phone") {
 			Println("检测到 add-phone 页面，尝试跳过...")
-			skipped := false
 			for _, skipText := range []string{"Skip", "Do this later", "Not now", "稍后", "跳过"} {
 				if br.clickElementByText(page, "button", skipText) {
 					Printf("已点击 %s 按钮...\n", skipText)
 					time.Sleep(3 * time.Second)
-					skipped = true
 					break
-				}
-			}
-
-			if !skipped && br.smsClient != nil {
-				Println("无法跳过手机验证，使用 Hero SMS...")
-				if err := br.handlePhoneVerificationWithSMS(page); err != nil {
-					Printf("SMS 验证失败: %v\n", err)
-				} else {
-					time.Sleep(3 * time.Second)
 				}
 			}
 		} else if strings.Contains(currentURL, "consent") {
@@ -912,49 +868,6 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 			verifyLink = otp
 		} else {
 			verifyLink = "OTP:" + otp
-		}
-	} else if br.config.GmailOAuth.Enabled {
-		Printf("使用 Gmail API 自动获取验证码...\n")
-
-		var gmailClient *GmailOAuthClient
-		var err error
-
-		if br.config.GmailOAuth.Credential != nil {
-			gmailClient, err = NewGmailOAuthClientWithCredential(br.config.GmailOAuth.Credential)
-		} else {
-			gmailClient, err = NewGmailOAuthClient(email)
-		}
-
-		if err != nil {
-			Printf("Gmail API 初始化失败: %v\n", err)
-			PrintGmailSetupInstructions()
-			Println("请手动输入验证码:")
-			reader := bufio.NewReader(os.Stdin)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-			if strings.HasPrefix(strings.ToLower(input), "http") {
-				verifyLink = input
-			} else {
-				verifyLink = "OTP:" + input
-			}
-		} else {
-			autoOTP, err := gmailClient.GetOpenAIOTPSkipUsed(120*time.Second, br.usedOTPs)
-			if err != nil {
-				Printf("Gmail API 获取验证码失败: %v\n", err)
-				Println("请手动输入验证码:")
-				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
-				input = strings.TrimSpace(input)
-				if strings.HasPrefix(strings.ToLower(input), "http") {
-					verifyLink = input
-				} else {
-					verifyLink = "OTP:" + input
-				}
-			} else {
-				Printf("Gmail API 获取到验证码: %s\n", autoOTP)
-				br.usedOTPs[autoOTP] = true
-				verifyLink = "OTP:" + autoOTP
-			}
 		}
 	} else {
 		Println("尝试从临时邮箱获取验证码...")
@@ -1091,68 +1004,4 @@ func (br *BrowserRegisterOAuth) exchangeCodeForTokens(code, codeVerifier, redire
 
 	Println("Token 兑换成功!")
 	return &tokenResp, nil
-}
-
-func (br *BrowserRegisterOAuth) handlePhoneVerificationWithSMS(page *rod.Page) error {
-	Println("=== 开始手机验证 ===")
-
-	smsNumber, err := br.smsClient.GetPhoneNumberForOpenAI()
-	if err != nil {
-		return fmt.Errorf("获取手机号失败: %v", err)
-	}
-
-	Printf("获取到手机号: %s (激活ID: %s)\n", smsNumber.PhoneNumber, smsNumber.ActivationID)
-
-	phoneInput, err := page.Timeout(5 * time.Second).Element("input[type='tel']")
-	if err != nil || phoneInput == nil {
-		br.smsClient.CancelActivation(smsNumber.ActivationID)
-		return fmt.Errorf("未找到手机输入框: %v", err)
-	}
-
-	phoneInput.MustClick()
-	phoneInput.MustInput(smsNumber.PhoneNumber)
-	Printf("已输入手机号: %s\n", smsNumber.PhoneNumber)
-	time.Sleep(1 * time.Second)
-
-	submitBtn, _ := page.Timeout(2 * time.Second).Element("button[type='submit']")
-	if submitBtn != nil {
-		submitBtn.MustClick()
-		Println("已提交手机号")
-	}
-
-	Println("等待短信验证码...")
-	smsCode, err := br.smsClient.WaitForOTPAndConfirm(smsNumber.ActivationID, 120*time.Second)
-	if err != nil {
-		return fmt.Errorf("获取验证码失败: %v", err)
-	}
-
-	Printf("收到验证码: %s\n", smsCode)
-
-	otpInput, err := page.Timeout(5 * time.Second).Element("input[type='text']")
-	if err != nil || otpInput == nil {
-		otpInputs, _ := page.Elements("input")
-		for _, inp := range otpInputs {
-			inpType, _ := inp.Eval("() => this.type || ''")
-			if inpType != nil && (inpType.Value.String() == "text" || inpType.Value.String() == "") {
-				otpInput = inp
-				break
-			}
-		}
-	}
-
-	if otpInput != nil {
-		otpInput.MustClick()
-		otpInput.MustInput(smsCode)
-		Printf("已输入验证码: %s\n", smsCode)
-		time.Sleep(1 * time.Second)
-
-		verifyBtn, _ := page.Timeout(2 * time.Second).Element("button[type='submit']")
-		if verifyBtn != nil {
-			verifyBtn.MustClick()
-			Println("已提交验证码")
-		}
-	}
-
-	time.Sleep(3 * time.Second)
-	return nil
 }

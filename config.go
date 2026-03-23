@@ -7,29 +7,13 @@ import (
 )
 
 type Config struct {
-	Proxy       string            `json:"proxy"`
-	Proxies     []string          `json:"proxies"`
-	Headless    bool              `json:"headless"`
-	Timeout     int               `json:"timeout"`
-	Debug       bool              `json:"debug"`
-	OutputDir   string            `json:"output_dir"`
-	Count       int               `json:"count"`
-	SMSActivate SMSActivateConfig `json:"sms_activate"`
-	GmailOAuth  GmailOAuthConfig  `json:"gmail_oauth"`
-}
-
-type GmailOAuthConfig struct {
-	Enabled    bool             `json:"enabled"`
-	Credential *GmailCredential `json:"credential"`
-}
-
-type GmailCredential struct {
-	Email        string `json:"email"`
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	RefreshToken string `json:"refresh_token"`
-	AccessToken  string `json:"access_token,omitempty"`
-	TokenExpiry  string `json:"token_expiry,omitempty"`
+	Proxy     string   `json:"proxy"`
+	Proxies   []string `json:"proxies"`
+	Headless  bool     `json:"headless"`
+	Timeout   int      `json:"timeout"`
+	Debug     bool     `json:"debug"`
+	OutputDir string   `json:"output_dir"`
+	Count     int      `json:"count"`
 }
 
 func DefaultConfig() *Config {
