@@ -1,0 +1,326 @@
+package main
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
+)
+
+// WebMailClient 使用浏览器访问 chatgpt.org.uk 网页获取临时邮箱
+type WebMailClient struct {
+	browser      *rod.Browser
+	page         *rod.Page
+	currentEmail string
+	proxyURL     string
+	headless     bool
+	usedOTPs     map[string]bool
+	otpMutex     sync.RWMutex
+	localProxy   *LocalProxyForwarder
+}
+
+// NewWebMailClient 创建 WebMailClient
+func NewWebMailClient(proxyURL string, headless bool) *WebMailClient {
+	return &WebMailClient{
+		proxyURL: proxyURL,
+		headless: headless,
+		usedOTPs: make(map[string]bool),
+	}
+}
+
+// Start 启动浏览器并导航到邮件页面
+func (w *WebMailClient) Start() error {
+	path, found := launcher.LookPath()
+	if !found {
+		return fmt.Errorf("未找到系统浏览器")
+	}
+
+	l := launcher.New().Bin(path).Headless(w.headless).
+		Set("no-sandbox", "true").
+		Set("disable-blink-features", "AutomationControlled").
+		Set("disable-infobars", "true").
+		Set("excludeSwitches", "enable-automation").
+		Set("useAutomationExtension", "false").
+		Set("disable-gpu", "true").
+		Set("disable-dev-shm-usage", "true").
+		Set("window-size", "1920,1080")
+
+	if w.proxyURL != "" {
+		proxyURL, err := url.Parse(w.proxyURL)
+		if err == nil {
+			if proxyURL.User != nil {
+				Println("WebMail: 代理需要认证，启动本地转发器...")
+				localProxy, err := NewLocalProxyForwarder(w.proxyURL)
+				if err != nil {
+					return fmt.Errorf("创建本地代理失败: %v", err)
+				}
+				localAddr, err := localProxy.Start()
+				if err != nil {
+					return fmt.Errorf("启动本地代理失败: %v", err)
+				}
+				Printf("WebMail: 本地代理已启动: %s\n", localAddr)
+				w.localProxy = localProxy
+				l = l.Set("proxy-server", localAddr)
+			} else {
+				l = l.Set("proxy-server", proxyURL.Host)
+			}
+		}
+	}
+
+	u, err := l.Launch()
+	if err != nil {
+		return fmt.Errorf("启动浏览器失败: %v", err)
+	}
+
+	w.browser = rod.New().ControlURL(u).MustConnect()
+
+	page, err := w.browser.Page(proto.TargetCreateTarget{URL: "https://mail.chatgpt.org.uk/"})
+	if err != nil {
+		return fmt.Errorf("打开邮件页面失败: %v", err)
+	}
+	w.page = page
+
+	_ = page.Timeout(30 * time.Second).WaitLoad()
+	time.Sleep(3 * time.Second)
+
+	w.closeDialog()
+
+	return nil
+}
+
+// closeDialog 关闭弹窗
+func (w *WebMailClient) closeDialog() {
+	dialogBtn, _ := w.page.Timeout(2 * time.Second).Element("button:has-text('Understood')")
+	if dialogBtn != nil {
+		dialogBtn.MustClick()
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// GetTempEmail 获取临时邮箱地址
+func (w *WebMailClient) GetTempEmail() (string, error) {
+	Println("\n📧 正在获取临时邮箱 (Web模式)...")
+
+	if w.page == nil {
+		if err := w.Start(); err != nil {
+			return "", err
+		}
+	}
+
+	w.closeDialog()
+
+	randomBtn, _ := w.page.Timeout(3 * time.Second).Element("button:has-text('Random')")
+	if randomBtn != nil {
+		randomBtn.MustClick()
+		time.Sleep(2 * time.Second)
+		w.closeDialog()
+	}
+
+	emailEl, err := w.page.Timeout(5 * time.Second).Element("[class*='address'], [class*='email']")
+	if err != nil || emailEl == nil {
+		emailEl, _ = w.page.Timeout(2 * time.Second).Element("generic")
+	}
+
+	if emailEl != nil {
+		text := emailEl.MustEval("() => this.innerText || this.textContent || ''").String()
+		text = strings.TrimSpace(text)
+		if strings.Contains(text, "@") && !strings.Contains(text, " ") {
+			w.currentEmail = text
+			Printf("[WebMail] ✅ 获取邮箱成功: %s\n", text)
+			return text, nil
+		}
+	}
+
+	emailFromURL := w.page.MustEval("() => window.location.pathname").String()
+	emailFromURL = strings.TrimPrefix(emailFromURL, "/")
+	if strings.Contains(emailFromURL, "@") {
+		w.currentEmail = emailFromURL
+		Printf("[WebMail] ✅ 从URL获取邮箱: %s\n", emailFromURL)
+		return emailFromURL, nil
+	}
+
+	emailText := w.page.MustEval(`() => {
+		const els = document.querySelectorAll('*');
+		for (const el of els) {
+			const text = el.innerText || el.textContent || '';
+			if (text.match(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/)) {
+				return text.trim();
+			}
+		}
+		return '';
+	}`).String()
+
+	if emailText != "" {
+		w.currentEmail = emailText
+		Printf("[WebMail] ✅ 从页面提取邮箱: %s\n", emailText)
+		return emailText, nil
+	}
+
+	return "", fmt.Errorf("无法从页面获取邮箱地址")
+}
+
+// CheckEmail 检查邮件
+func (w *WebMailClient) CheckEmail(email string) (string, error) {
+	return w.CheckEmailSkipUsed(email, nil)
+}
+
+// CheckEmailSkipUsed 检查邮件，跳过已使用的OTP
+func (w *WebMailClient) CheckEmailSkipUsed(email string, usedOTPs map[string]bool) (string, error) {
+	maxRetries := 30
+	Printf("📬 WebMail 检查邮箱: %s\n", email)
+
+	for i := 0; i < maxRetries; i++ {
+		refreshBtn, _ := w.page.Timeout(2 * time.Second).Element("button:has-text('Refresh')")
+		if refreshBtn != nil {
+			refreshBtn.MustClick()
+			time.Sleep(2 * time.Second)
+		}
+
+		emailItems := w.page.MustEval(`() => {
+			const items = [];
+			const emailElements = document.querySelectorAll('[class*="email"], [class*="message"], [class*="inbox"] a, li');
+			for (const el of emailElements) {
+				const subject = el.querySelector('[class*="subject"]')?.innerText || '';
+				const content = el.innerText || el.textContent || '';
+				const href = el.href || '';
+				if (subject || content) {
+					items.push({ subject, content, href });
+				}
+			}
+			return items;
+		}`)
+
+		itemsStr := emailItems.String()
+		if itemsStr != "" && strings.Contains(itemsStr, "verify") {
+			if link := w.extractVerifyLinkSkipUsed(itemsStr, usedOTPs); link != "" {
+				Printf("✅ WebMail 提取到验证链接: %s\n", link)
+				return link, nil
+			}
+		}
+
+		links := w.page.MustEval(`() => {
+			const links = [];
+			document.querySelectorAll('a, [onclick]').forEach(el => {
+				const text = (el.innerText || el.textContent || '').toLowerCase();
+				if (text.includes('verify') || text.includes('openai') || text.includes('chatgpt')) {
+					links.push({ text: el.innerText, href: el.href || '' });
+				}
+			});
+			return links;
+		}`)
+
+		linksStr := links.String()
+		if strings.Contains(linksStr, "http") {
+			if idx := strings.Index(linksStr, "https://"); idx != -1 {
+				end := idx
+				for end < len(linksStr) && linksStr[end] != '"' && linksStr[end] != '\'' && linksStr[end] != ' ' && linksStr[end] != '<' {
+					end++
+				}
+				if end > idx {
+					return linksStr[idx:end], nil
+				}
+			}
+		}
+
+		Printf("  ⏳ WebMail 等待验证邮件... (%d/%d)\n", i+1, maxRetries)
+		time.Sleep(5 * time.Second)
+	}
+
+	return "", fmt.Errorf("WebMail 等待验证邮件超时")
+}
+
+// openEmailAndGetContent 点击邮件获取完整内容
+func (w *WebMailClient) openEmailAndGetContent(usedOTPs map[string]bool) string {
+	emailLinks, _ := w.page.Elements("a[href*='mail'], li[class*='email'], [class*='message']")
+	for _, link := range emailLinks {
+		text := link.MustEval("() => this.innerText || this.textContent || ''").String()
+		textLower := strings.ToLower(text)
+		if strings.Contains(textLower, "verify") ||
+			strings.Contains(textLower, "openai") ||
+			strings.Contains(textLower, "chatgpt") {
+
+			link.MustClick()
+			time.Sleep(2 * time.Second)
+
+			content := w.page.MustEval("() => document.body.innerText || document.body.textContent || ''").String()
+			if link := w.extractVerifyLinkSkipUsed(content, usedOTPs); link != "" {
+				return link
+			}
+
+			w.page.MustEval("() => history.back()")
+			time.Sleep(1 * time.Second)
+		}
+	}
+	return ""
+}
+
+// extractVerifyLinkSkipUsed 从内容中提取验证链接，跳过已使用的OTP
+func (w *WebMailClient) extractVerifyLinkSkipUsed(content string, usedOTPs map[string]bool) string {
+	if otp := extractOTPCode(content); otp != "" {
+		if usedOTPs != nil && usedOTPs[otp] {
+			Printf("  跳过已使用的OTP: %s\n", otp)
+		} else {
+			return "OTP:" + otp
+		}
+	}
+
+	patterns := []string{
+		`https://auth.openai.com/authorize?`,
+		`https://chat.open.ai.com/auth/`,
+		`https://platform.openai.com/`,
+		`https://auth.openai.com/`,
+	}
+
+	for _, pattern := range patterns {
+		if idx := strings.Index(content, pattern); idx != -1 {
+			end := idx
+			for end < len(content) && content[end] != '"' && content[end] != '\'' && content[end] != ' ' && content[end] != '<' {
+				end++
+			}
+			if end > idx {
+				link := content[idx:end]
+				link = strings.ReplaceAll(link, "&amp;", "&")
+				return link
+			}
+		}
+	}
+
+	return ""
+}
+
+// MarkOTPUsed 标记OTP为已使用
+func (w *WebMailClient) MarkOTPUsed(otp string) {
+	w.otpMutex.Lock()
+	defer w.otpMutex.Unlock()
+	w.usedOTPs[otp] = true
+}
+
+// Close 关闭浏览器
+func (w *WebMailClient) Close() {
+	if w.page != nil {
+		w.page.MustClose()
+	}
+	if w.browser != nil {
+		w.browser.MustClose()
+	}
+	if w.localProxy != nil {
+		w.localProxy.Stop()
+	}
+}
+
+// NavigateToEmail 导航到特定邮箱的页面
+func (w *WebMailClient) NavigateToEmail(email string) error {
+	url := fmt.Sprintf("https://mail.chatgpt.org.uk/%s", email)
+	if w.page == nil {
+		return fmt.Errorf("浏览器未启动")
+	}
+	w.page.MustNavigate(url)
+	time.Sleep(2 * time.Second)
+	w.closeDialog()
+	return nil
+}

@@ -34,6 +34,14 @@ func NewBrowserRegisterOAuth(config *Config, proxyURL string) *BrowserRegisterOA
 	}
 }
 
+func NewBrowserRegisterOAuthWithWebMail(config *Config, proxyURL string, headless bool) *BrowserRegisterOAuth {
+	return &BrowserRegisterOAuth{
+		BrowserRegister: NewBrowserRegisterWithWebMail(config, proxyURL, headless),
+		oauthServer:     NewOAuthCallbackServer(),
+		usedOTPs:        make(map[string]bool),
+	}
+}
+
 // RegisterWithOAuth 使用 OAuth PKCE 流程注册并获取 refresh_token
 func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password, otp string) (*AccountCredentials, error) {
 	// 生成 PKCE 代码
@@ -471,7 +479,21 @@ func (br *BrowserRegisterOAuth) handleOAuthLogin(page *rod.Page, email, password
 				}
 
 				var otp string
-				if br.httpClient != nil {
+				if br.webMailClient != nil {
+					Println("使用 WebMail 等待新验证码...")
+					for retry := 0; retry < 30; retry++ {
+						verifyLink, err := br.webMailClient.CheckEmailSkipUsed(email, br.usedOTPs)
+						if err == nil && verifyLink != "" {
+							if strings.HasPrefix(verifyLink, "OTP:") {
+								otp = strings.TrimPrefix(verifyLink, "OTP:")
+								Printf("WebMail 获取到验证码: %s\n", otp)
+								break
+							}
+						}
+						Printf("等待验证码... (%d/30)\n", retry+1)
+						time.Sleep(5 * time.Second)
+					}
+				} else if br.httpClient != nil {
 					Println("使用临时邮箱 API 等待新验证码...")
 					for retry := 0; retry < 30; retry++ {
 						verifyLink, err := br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
@@ -872,7 +894,15 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 	} else {
 		Println("尝试从临时邮箱获取验证码...")
 
-		autoVerifyLink, err := br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
+		var autoVerifyLink string
+		var err error
+
+		if br.webMailClient != nil {
+			autoVerifyLink, err = br.webMailClient.CheckEmailSkipUsed(email, br.usedOTPs)
+		} else {
+			autoVerifyLink, err = br.httpClient.CheckEmailSkipUsed(email, br.usedOTPs)
+		}
+
 		if err == nil && autoVerifyLink != "" {
 			Printf("从临时邮箱获取到验证内容: %s\n", autoVerifyLink)
 			verifyLink = autoVerifyLink

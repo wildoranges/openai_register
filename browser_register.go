@@ -24,9 +24,10 @@ var (
 )
 
 type BrowserRegister struct {
-	browser    *rod.Browser
-	httpClient *HTTPClient
-	config     *Config
+	browser       *rod.Browser
+	httpClient    *HTTPClient
+	webMailClient *WebMailClient
+	config        *Config
 }
 
 type BrowserFingerprintProfile struct {
@@ -53,6 +54,13 @@ func NewBrowserRegisterWithProxy(config *Config, proxyURL string) *BrowserRegist
 	return &BrowserRegister{
 		httpClient: NewHTTPClientWithProxy(proxyURL),
 		config:     config,
+	}
+}
+
+func NewBrowserRegisterWithWebMail(config *Config, proxyURL string, headless bool) *BrowserRegister {
+	return &BrowserRegister{
+		webMailClient: NewWebMailClient(proxyURL, headless),
+		config:        config,
 	}
 }
 

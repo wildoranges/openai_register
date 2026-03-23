@@ -36,6 +36,7 @@ func main() {
 	}
 
 	simMode := false
+	webmailMode := false
 	count := config.Count
 	skipNext := false
 	specifiedEmail := ""
@@ -49,6 +50,8 @@ func main() {
 		arg := os.Args[i]
 		if arg == "--sim" || arg == "-sim" {
 			simMode = true
+		} else if arg == "--webmail" || arg == "-webmail" {
+			webmailMode = true
 		} else if arg == "--head" || arg == "-head" {
 			config.Headless = false
 		} else if arg == "--debug" || arg == "-debug" {
@@ -90,6 +93,9 @@ func main() {
 
 	Printf("无头模式: %v\n", config.Headless)
 	Printf("输出目录: %s\n", config.OutputDir)
+	if webmailMode {
+		Println("邮箱模式: WebMail (浏览器获取临时邮箱)")
+	}
 	if specifiedEmail != "" {
 		Printf("指定邮箱: %s\n", specifiedEmail)
 		Printf("注册数量: 1 (指定邮箱模式)\n\n")
@@ -179,8 +185,27 @@ func main() {
 				Printf("使用代理: %s\n", maskProxyURL(currentProxy))
 			}
 
-			httpClient := NewHTTPClientWithProxy(currentProxy)
-			brOAuth := NewBrowserRegisterOAuth(config, currentProxy)
+			var httpClient *HTTPClient
+			var webMailClient *WebMailClient
+			var brOAuth *BrowserRegisterOAuth
+
+			if webmailMode {
+				webMailClient = NewWebMailClient(currentProxy, config.Headless)
+				if err := webMailClient.Start(); err != nil {
+					Printf("启动 WebMail 失败: %v\n", err)
+					if i < count-1 {
+						waitTime := 10 + rand.Intn(10)
+						Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
+						time.Sleep(time.Duration(waitTime) * time.Second)
+					}
+					continue
+				}
+				defer webMailClient.Close()
+				brOAuth = NewBrowserRegisterOAuthWithWebMail(config, currentProxy, config.Headless)
+			} else {
+				httpClient = NewHTTPClientWithProxy(currentProxy)
+				brOAuth = NewBrowserRegisterOAuth(config, currentProxy)
+			}
 
 			var email, password string
 			var err error
@@ -195,7 +220,11 @@ func main() {
 				Printf("使用指定邮箱: %s\n", email)
 				Printf("密码: %s\n", password)
 			} else {
-				email, err = httpClient.GetTempEmail()
+				if webmailMode {
+					email, err = webMailClient.GetTempEmail()
+				} else {
+					email, err = httpClient.GetTempEmail()
+				}
 				if err != nil {
 					Printf("获取临时邮箱失败: %v\n", err)
 					if i < count-1 {
