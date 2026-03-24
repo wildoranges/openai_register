@@ -133,6 +133,13 @@ type Point struct {
 	X, Y float64
 }
 
+func randomBirthdate() string {
+	year := 1990 + rand.Intn(15)
+	month := 1 + rand.Intn(12)
+	day := 1 + rand.Intn(28)
+	return fmt.Sprintf("%d-%02d-%02d", year, month, day)
+}
+
 func (br *BrowserRegister) randomFingerprintProfile() BrowserFingerprintProfile {
 	profiles := []BrowserFingerprintProfile{
 		{
@@ -817,8 +824,7 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 					}
 				}
 
-				year := 1990 + rand.Intn(15)
-				birthdate := fmt.Sprintf("%d-01-15", year)
+				birthdate := randomBirthdate()
 				Printf("设置生日: %s\n", birthdate)
 
 				// 检测是否有 React Aria DateField (有 data-type 属性的 segment)
@@ -829,89 +835,41 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 				}`).Bool()
 
 				if hasDateSegments {
+					birthdateParts := strings.Split(birthdate, "-")
+					monthStr := birthdateParts[1]
+					dayStr := birthdateParts[2]
+					yearStr := birthdateParts[0]
 					Printf("检测到 React Aria DateField，使用正确的事件序列设置日期\n")
 
-					// 设置 month segment
-					_ = page.MustEval(`() => {
-						const el = document.querySelector('[data-type="month"]');
-						if (!el) return;
-						el.focus();
-						const range = document.createRange();
-						range.selectNodeContents(el);
-						const sel = window.getSelection();
-						sel.removeAllRanges();
-						sel.addRange(range);
-						const value = '01';
-						for (let i = 0; i < value.length; i++) {
-							const char = value[i];
-							const beforeInputEvent = new InputEvent('beforeinput', {
-								bubbles: true, cancelable: true, data: char, inputType: 'insertText'
-							});
-							el.dispatchEvent(beforeInputEvent);
-							if (i === 0) { el.textContent = char; } else { el.textContent += char; }
-							const inputEvent = new InputEvent('input', {
-								bubbles: true, data: char, inputType: 'insertText'
-							});
-							el.dispatchEvent(inputEvent);
-						}
-						el.dispatchEvent(new Event('change', {bubbles: true}));
-					}`)
-					time.Sleep(150 * time.Millisecond)
-
-					// 设置 day segment
-					_ = page.MustEval(`() => {
-						const el = document.querySelector('[data-type="day"]');
-						if (!el) return;
-						el.focus();
-						const range = document.createRange();
-						range.selectNodeContents(el);
-						const sel = window.getSelection();
-						sel.removeAllRanges();
-						sel.addRange(range);
-						const value = '15';
-						for (let i = 0; i < value.length; i++) {
-							const char = value[i];
-							const beforeInputEvent = new InputEvent('beforeinput', {
-								bubbles: true, cancelable: true, data: char, inputType: 'insertText'
-							});
-							el.dispatchEvent(beforeInputEvent);
-							if (i === 0) { el.textContent = char; } else { el.textContent += char; }
-							const inputEvent = new InputEvent('input', {
-								bubbles: true, data: char, inputType: 'insertText'
-							});
-							el.dispatchEvent(inputEvent);
-						}
-						el.dispatchEvent(new Event('change', {bubbles: true}));
-					}`)
-					time.Sleep(150 * time.Millisecond)
-
-					// 设置 year segment
-					yearStr := fmt.Sprintf("%d", year)
 					_ = page.MustEval(fmt.Sprintf(`() => {
-						const el = document.querySelector('[data-type="year"]');
-						if (!el) return;
-						el.focus();
-						const range = document.createRange();
-						range.selectNodeContents(el);
-						const sel = window.getSelection();
-						sel.removeAllRanges();
-						sel.addRange(range);
-						const value = '%s';
-						for (let i = 0; i < value.length; i++) {
-							const char = value[i];
-							const beforeInputEvent = new InputEvent('beforeinput', {
-								bubbles: true, cancelable: true, data: char, inputType: 'insertText'
-							});
-							el.dispatchEvent(beforeInputEvent);
-							if (i === 0) { el.textContent = char; } else { el.textContent += char; }
-							const inputEvent = new InputEvent('input', {
-								bubbles: true, data: char, inputType: 'insertText'
-							});
-							el.dispatchEvent(inputEvent);
-						}
-						el.dispatchEvent(new Event('change', {bubbles: true}));
-					}`, yearStr))
-					time.Sleep(150 * time.Millisecond)
+						const setSegmentValue = (selector, value) => {
+							const el = document.querySelector(selector);
+							if (!el) return;
+							el.focus();
+							const range = document.createRange();
+							range.selectNodeContents(el);
+							const sel = window.getSelection();
+							sel.removeAllRanges();
+							sel.addRange(range);
+							for (let i = 0; i < value.length; i++) {
+								const char = value[i];
+								const beforeInputEvent = new InputEvent('beforeinput', {
+									bubbles: true, cancelable: true, data: char, inputType: 'insertText'
+								});
+								el.dispatchEvent(beforeInputEvent);
+								if (i === 0) { el.textContent = char; } else { el.textContent += char; }
+								const inputEvent = new InputEvent('input', {
+									bubbles: true, data: char, inputType: 'insertText'
+								});
+								el.dispatchEvent(inputEvent);
+							}
+							el.dispatchEvent(new Event('change', {bubbles: true}));
+						};
+						setSegmentValue('[data-type="month"]', %q);
+						setSegmentValue('[data-type="day"]', %q);
+						setSegmentValue('[data-type="year"]', %q);
+					}`, monthStr, dayStr, yearStr))
+					time.Sleep(450 * time.Millisecond)
 
 					// 同时设置 hidden input 以确保值同步
 					_ = page.MustEval(fmt.Sprintf(`() => {

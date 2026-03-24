@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"net/url"
 	"testing"
 
@@ -107,6 +109,31 @@ func TestApplyLauncherProxyPreservesExplicitProxyScheme(t *testing.T) {
 	}
 	if got := l.Get("proxy-server"); got != explicitProxy {
 		t.Fatalf("expected launcher proxy %q, got %q", explicitProxy, got)
+	}
+}
+
+
+func TestRandomBirthdateUsesSafeMonthAndDayRange(t *testing.T) {
+	for range 200 {
+		birthdate := randomBirthdate()
+		parts := strings.Split(birthdate, "-")
+		if len(parts) != 3 {
+			t.Fatalf("expected yyyy-mm-dd format, got %q", birthdate)
+		}
+		month, err := strconv.Atoi(parts[1])
+		if err != nil {
+			t.Fatalf("expected numeric month in %q: %v", birthdate, err)
+		}
+		day, err := strconv.Atoi(parts[2])
+		if err != nil {
+			t.Fatalf("expected numeric day in %q: %v", birthdate, err)
+		}
+		if month < 1 || month > 12 {
+			t.Fatalf("expected month range 1-12, got %d from %q", month, birthdate)
+		}
+		if day < 1 || day > 28 {
+			t.Fatalf("expected day range 1-28, got %d from %q", day, birthdate)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -558,8 +559,12 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 		Printf("输入姓名: %s\n", name)
 	}
 
-	year := 1990 + rand.Intn(15)
+	birthdate := randomBirthdate()
+	birthdateParts := strings.Split(birthdate, "-")
+	year, _ := strconv.Atoi(birthdateParts[0])
 	age := 2026 - year
+	monthStr := birthdateParts[1]
+	dayStr := birthdateParts[2]
 
 	htmlContent := page.MustEval(`() => document.documentElement.outerHTML`).String()
 	os.WriteFile("debug_about_you_page.html", []byte(htmlContent), 0644)
@@ -582,14 +587,14 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 	hasDateSegments := visibleInfo.Get("hasDateSegments").Bool()
 
 	if hasDateSegments {
-		Printf("检测到 React Aria DateField，使用键盘模拟设置日期: %d-01-15\n", year)
+		Printf("检测到 React Aria DateField，使用键盘模拟设置日期: %s\n", birthdate)
 
 		segments := []struct {
 			segType string
 			value   string
 		}{
-			{"month", "01"},
-			{"day", "15"},
+			{"month", monthStr},
+			{"day", dayStr},
 			{"year", fmt.Sprintf("%d", year)},
 		}
 
@@ -656,11 +661,11 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 			const hiddenInput = document.querySelector('input[name="birthday"]');
 			if (hiddenInput) {
 				const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-				setter.call(hiddenInput, '%d-01-15');
+				setter.call(hiddenInput, '%s');
 				hiddenInput.dispatchEvent(new Event('input', {bubbles: true}));
 				hiddenInput.dispatchEvent(new Event('change', {bubbles: true}));
 			}
-		}`, year))
+		}`, birthdate))
 		time.Sleep(200 * time.Millisecond)
 
 		result := page.MustEval(`() => {
@@ -679,7 +684,6 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 	} else {
 		birthdayInput, _ := page.Timeout(1 * time.Second).Element("input[name='birthday']")
 		if birthdayInput != nil {
-			birthdate := fmt.Sprintf("%d-01-15", year)
 			Printf("设置生日 (普通 input): %s\n", birthdate)
 			_ = birthdayInput.Timeout(2 * time.Second).SelectAllText()
 			_ = birthdayInput.Timeout(2 * time.Second).Input(birthdate)
