@@ -69,6 +69,15 @@ func NewHTTPClientWithProxy(proxyURL string) *HTTPClient {
 	}
 }
 
+func (c *HTTPClient) SetDefaultHeaders(req *http.Request) {
+	if req == nil {
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Referer", "https://mail.chatgpt.org.uk")
+}
+
 // GetTempEmail 获取临时邮箱（仅使用 chatgpt.org.uk）
 func (c *HTTPClient) GetTempEmail() (string, error) {
 	Println("\n📧 正在获取临时邮箱...")
@@ -254,6 +263,10 @@ func (c *HTTPClient) checkMailContentSkipUsed(subject, htmlContent, content, bod
 	return ""
 }
 
+func (c *HTTPClient) checkMailContent(subject, htmlContent, content, body string) string {
+	return c.checkMailContentSkipUsed(subject, htmlContent, content, body, nil)
+}
+
 func extractVerifyLinkSkipUsed(content string, usedOTPs map[string]bool) string {
 	if otp := extractOTPCode(content); otp != "" {
 		if usedOTPs != nil && usedOTPs[otp] {
@@ -285,6 +298,10 @@ func extractVerifyLinkSkipUsed(content string, usedOTPs map[string]bool) string 
 	}
 
 	return ""
+}
+
+func extractVerifyLink(content string) string {
+	return extractVerifyLinkSkipUsed(content, nil)
 }
 
 func extractOTPCode(content string) string {
