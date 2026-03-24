@@ -14,7 +14,6 @@
 ## 目录
 
 - [环境准备](#环境准备)
-- [分支说明](#分支说明)
 - [快速开始](#快速开始)
 - [第一部分：OpenAI 账号注册机](#第一部分openai-账号注册机)
 - [第二部分：凭证格式转换](#第二部分凭证格式转换)
@@ -116,7 +115,7 @@ go build -o merge_credentials ./cmd/merge_credentials
 # 复制配置模板
 cp config.json.example config.json
 
-# 编辑配置文件（填写代理地址，凭证输出路径等）
+# 编辑配置文件（填写代理地址、输出目录等）
 # 推荐配置代理来使用，避免region限制和Cloudflare验证失败
 vim config.json
 ```
@@ -126,14 +125,19 @@ vim config.json
 ```bash
 # 运行注册（5 个账号）
 xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register 5
+
+# 使用 WebMail 模式
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register --webmail 5
 ```
 
 ### 5. 转换凭证
 
 ```bash
-# 转换为CLIProxyAPI兼容格式
+# 手动转换为 CLIProxyAPI 兼容格式
 ./convert_to_cliproxy
 ```
+
+> 如果 `config.json` 中设置了 `convert_dir`，注册成功后会自动额外输出一份 CLIProxyAPI 格式凭证到该目录。
 
 ### 6. 启动 API 代理（使用[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)）
 
@@ -202,9 +206,10 @@ cp config.json.example config.json
 {
   "proxy": "http://proxy-host:port",
   "headless": true,
-  "timeout": 600,
+  "timeout": 60,
   "debug": false,
   "output_dir": "creds",
+  "convert_dir": "~/.cli-proxy-api",
   "count": 1
 }
 ```
@@ -214,9 +219,10 @@ cp config.json.example config.json
 | `proxy` | string | 代理地址（支持认证） | 空 |
 | `proxies` | []string | 代理地址列表（多代理轮换） | 空 |
 | `headless` | bool | 无头模式 | true |
-| `timeout` | int | 超时时间（秒） | 600 |
+| `timeout` | int | 超时时间（秒） | 60 |
 | `debug` | bool | 调试模式 | false |
 | `output_dir` | string | 输出目录 | creds |
+| `convert_dir` | string | 额外输出 CLIProxyAPI 格式凭证的目录 | ~/.cli-proxy-api |
 | `count` | int | 注册账号数量 | 1 |
 
 #### 代理配置详解
@@ -323,7 +329,7 @@ crontab -e
 **说明：**
 - `config_cron.json` 是定时任务专用配置，不会覆盖 `config.json`
 - 日志保存在 `logs/` 目录，自动清理 7 天前的日志
-- 注册完成后自动转换为 CLIProxyAPI 格式，输出到 `~/.cli-proxy-api/`
+- 如果配置了 `convert_dir`，注册完成后会自动转换为 CLIProxyAPI 格式并输出到该目录
 - 自动清理无 `refresh_token` 的凭证
 
 **命令行参数：**
@@ -337,13 +343,20 @@ crontab -e
 | `--webmail` | 使用 WebMail 模式获取临时邮箱（绕过 API 配额限制） |
 
 > **说明：** 默认使用 OAuth PKCE 模式，获取 `access_token` + `refresh_token`
-注册完成后，凭证默认保存在 `creds/` 目录：
+
+注册完成后，凭证默认保存在 `output_dir`（默认 `creds/`）目录：
 
 | 文件 | 格式 | 说明 |
 |------|------|------|
-| `openai_credentials.json` | JSON | 完整凭证数组，包含 email、password、access_token、refresh_token |
-| `openai_tokens.txt` | TEXT | 环境变量格式，每行一个 `OPENAI_ACCESS_TOKEN=xxx` |
-| `auth_*.json` | JSON | CodeX CLI 格式，每个账号一个文件 |
+| `openai_credentials.json` | JSON | 完整凭证数组，按 email 去重更新 |
+| `openai_tokens.txt` | TEXT | 环境变量格式文本输出 |
+| `auth_*.json` | JSON | 本项目的单账号输出格式，文件名使用邮箱前缀 |
+
+如果配置了 `convert_dir`（默认 `~/.cli-proxy-api`），每次注册成功后还会额外输出：
+
+| 文件 | 格式 | 说明 |
+|------|------|------|
+| `codex-<email>.json` | JSON | CLIProxyAPI 使用的单账号凭证格式 |
 
 ### 1.5 临时邮箱服务
 
@@ -397,21 +410,20 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-registe
         ↓
 9. 用 code 兑换 access_token + refresh_token
         ↓
-10. 保存凭证到文件
+10. 保存凭证到 `output_dir`
+        ↓
+11. 如配置了 `convert_dir`，额外转换并输出到 CLIProxyAPI 目录
 ```
 ---
 
 ## 第二部分：凭证格式转换
 
-### 2.1 为什么需要转换？
+### 2.1 自动转换与手动转换
 
-OpenAI 注册机输出的凭证格式与 CLIProxyAPI 要求的格式不同：
+项目现在支持两种方式输出 CLIProxyAPI 凭证：
 
-| 项目 | 注册机输出 | CLIProxyAPI 要求 |
-|------|------------|------------------|
-| 文件格式 | 单个 JSON 数组 | 每个账号一个 JSON 文件 |
-| 字段名称 | `access_token` | `access_token` + `id_token` + `refresh_token` |
-| 元数据 | 基础信息 | 需要 `type`, `account_id`, `expired` 等 |
+1. **自动转换**：在 `config.json` 中设置 `convert_dir`
+2. **手动转换**：运行 `./convert_to_cliproxy`
 
 ### 2.2 使用转换工具
 
@@ -433,7 +445,7 @@ go build -o convert_to_cliproxy ./cmd/convert
 
 
 
-### 2.3 凭证文件格式
+### 2.3 转换后的凭证文件格式
 
 转换后的每个文件格式如下：
 
@@ -452,7 +464,7 @@ go build -o convert_to_cliproxy ./cmd/convert
 
 ### 2.4 清理无刷新令牌的凭证
 
-旧版本凭证可能没有 `refresh_token`，无法自动刷新。使用清理工具删除这些凭证：
+可使用清理工具删除没有 `refresh_token` 的凭证：
 
 ```bash
 # 预览模式（不删除，只显示）
@@ -464,7 +476,7 @@ go build -o convert_to_cliproxy ./cmd/convert
 
 ### 2.5 合并多个目录的凭证
 
-将多个目录的凭证合并到一个目录，自动根据 email 去重：
+将多个目录的凭证合并到一个目录，按 email 去重：
 
 ```bash
 # 合并 creds 和 creds_refresh 到 creds_merged
@@ -476,10 +488,8 @@ go build -o convert_to_cliproxy ./cmd/convert
 
 **说明：**
 - 读取所有源目录的 `auth_*.json` 和 `openai_credentials.json`
-- 根据 `email` 字段去重
+- 根据 `email` 字段去重，相同 email 时保留先读到的那份
 - 输出到目标目录的 `openai_credentials.json` 和 `auth_*.json`
-
----
 
 ---
 
