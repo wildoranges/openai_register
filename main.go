@@ -4,8 +4,46 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 )
+
+func shouldMarkProxyFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if err == ErrUnsupportedEmail || err == ErrUserAlreadyExists || err == ErrLoginFailedAliasUsed {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	networkSignals := []string{
+		"proxy",
+		"代理",
+		"timeout",
+		"deadline exceeded",
+		"connection reset",
+		"connection refused",
+		"no such host",
+		"network is unreachable",
+		"tls handshake timeout",
+		"i/o timeout",
+		"请求失败",
+		"连接",
+		"oauth 回调失败",
+		"token 兑换失败",
+		"当前ip/地区不支持openai注册",
+	}
+
+	for _, signal := range networkSignals {
+		if strings.Contains(message, signal) {
+			return true
+		}
+	}
+
+	return false
+}
 
 func init() {
 	_ = fmt.Sprintf
@@ -108,6 +146,9 @@ func main() {
 
 	var proxyPool *ProxyPool
 	if len(config.Proxies) > 0 {
+		if config.Clash != nil {
+			Println("检测到 clash 配置，但已配置静态 proxies，忽略 clash 代理池")
+		}
 		proxyPool = NewProxyPool(config.Proxies)
 		proxyPool.TestAll()
 		if proxyPool.GetAvailableCount() == 0 {
@@ -115,6 +156,9 @@ func main() {
 			return
 		}
 	} else if config.Proxy != "" {
+		if config.Clash != nil {
+			Println("检测到 clash 配置，但已配置静态 proxy，忽略 clash 代理池")
+		}
 		Printf("代理: %s\n", maskProxyURL(config.Proxy))
 		Println("\n🔍 测试代理...")
 		result := TestSingleProxy(config.Proxy)
@@ -134,6 +178,18 @@ func main() {
 			Printf("✅ 代理可用 → %s\n", location)
 		} else {
 			Println("✅ 代理可用")
+		}
+	} else if config.Clash != nil {
+		var clashErr error
+		proxyPool, clashErr = NewClashProxyPool(config.Clash)
+		if clashErr != nil {
+			Printf("\n❌ Clash 代理池初始化失败: %v\n", clashErr)
+			return
+		}
+		proxyPool.TestAll()
+		if proxyPool.GetAvailableCount() == 0 {
+			Println("\n❌ Clash 代理池没有可用节点，退出")
+			return
 		}
 	}
 
@@ -183,9 +239,15 @@ func main() {
 			Printf("\n========== 注册第 %d/%d 个账号 ==========\n", i+1, count)
 
 			currentProxy := config.Proxy
+			var currentAssignment *ProxyAssignment
 			if proxyPool != nil {
-				currentProxy = proxyPool.GetNext()
-				Printf("使用代理: %s\n", maskProxyURL(currentProxy))
+				currentAssignment = proxyPool.GetNextAssignment()
+				if currentAssignment == nil {
+					Println("当前没有可用代理节点，停止注册")
+					break
+				}
+				currentProxy = currentAssignment.ProxyURL
+				Printf("使用代理: %s\n", currentAssignment.Label())
 			}
 
 			var httpClient *HTTPClient
@@ -252,7 +314,7 @@ func main() {
 			maxAttempts := 5
 
 		RETRY_LOOP:
-			for attempt := 0; attempt < maxAttempts; attempt++ {
+			for attempt := range maxAttempts {
 				if attempt > 0 {
 					Printf("\n=== 重试第 %d 次 (共 %d 次) ===\n", attempt, maxAttempts-1)
 				}
@@ -283,8 +345,12 @@ func main() {
 			}
 
 			if regErr != nil || credentials == nil {
-				if proxyPool != nil {
-					proxyPool.MarkFailed(currentProxy)
+				if proxyPool != nil && shouldMarkProxyFailed(regErr) {
+					if currentAssignment != nil {
+						proxyPool.MarkFailedAssignment(currentAssignment)
+					} else {
+						proxyPool.MarkFailed(currentProxy)
+					}
 				}
 				if i < count-1 {
 					waitTime := 10 + rand.Intn(10)

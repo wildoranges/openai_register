@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,8 +13,17 @@ import (
 	"time"
 )
 
+const (
+	ProxySourceStatic = "static"
+	ProxySourceClash  = "clash"
+)
+
 type ProxyStatus struct {
+	ID        string
+	Source    string
 	URL       string
+	Node      string
+	Group     string
 	IP        string
 	Country   string
 	City      string
@@ -22,10 +32,36 @@ type ProxyStatus struct {
 	Error     string
 }
 
+type ProxyAssignment struct {
+	ID       string
+	Source   string
+	ProxyURL string
+	Node     string
+	Group    string
+}
+
+func (a *ProxyAssignment) Label() string {
+	if a == nil {
+		return ""
+	}
+	if a.Source == ProxySourceClash {
+		return fmt.Sprintf("Clash[%s/%s]", a.Group, a.Node)
+	}
+	return maskProxyURL(a.ProxyURL)
+}
+
 type ProxyPool struct {
-	proxies []*ProxyStatus
-	mu      sync.RWMutex
-	index   int
+	proxies     []*ProxyStatus
+	mu          sync.RWMutex
+	index       int
+	clash       *clashClient
+	clashSelect sync.Mutex
+}
+
+type clashClient struct {
+	baseURL    string
+	secret     string
+	httpClient *http.Client
 }
 
 func NewProxyPool(proxyURLs []string) *ProxyPool {
@@ -33,9 +69,57 @@ func NewProxyPool(proxyURLs []string) *ProxyPool {
 		proxies: make([]*ProxyStatus, len(proxyURLs)),
 	}
 	for i, p := range proxyURLs {
-		pool.proxies[i] = &ProxyStatus{URL: p}
+		pool.proxies[i] = &ProxyStatus{
+			ID:     fmt.Sprintf("static:%d", i),
+			Source: ProxySourceStatic,
+			URL:    p,
+		}
 	}
 	return pool
+}
+
+func NewClashProxyPool(cfg *ClashConfig) (*ProxyPool, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("clash 配置为空")
+	}
+	group := strings.TrimSpace(cfg.ProxyGroup)
+	if group == "" {
+		return nil, fmt.Errorf("clash.proxy_group 不能为空")
+	}
+
+	transportURL, err := normalizeProxyURL(cfg.MixedProxy)
+	if err != nil {
+		return nil, fmt.Errorf("clash.mixed_proxy 无效: %w", err)
+	}
+
+	client, err := newClashClient(cfg.ExternalController, cfg.Secret)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes, err := client.ListGroupNodes(group, cfg.Include, cfg.Exclude)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("clash 代理组 %q 没有可用节点", group)
+	}
+
+	pool := &ProxyPool{
+		proxies: make([]*ProxyStatus, 0, len(nodes)),
+		clash:   client,
+	}
+	for _, node := range nodes {
+		pool.proxies = append(pool.proxies, &ProxyStatus{
+			ID:     "clash:" + node,
+			Source: ProxySourceClash,
+			URL:    transportURL,
+			Node:   node,
+			Group:  group,
+		})
+	}
+
+	return pool, nil
 }
 
 func (p *ProxyPool) TestAll() {
@@ -45,6 +129,9 @@ func (p *ProxyPool) TestAll() {
 	semaphore := make(chan struct{}, 5)
 
 	for i := range p.proxies {
+		if p.proxies[i].Source == ProxySourceClash {
+			continue
+		}
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -52,6 +139,11 @@ func (p *ProxyPool) TestAll() {
 			defer func() { <-semaphore }()
 			p.testProxy(idx)
 		}(i)
+	}
+	for i := range p.proxies {
+		if p.proxies[i].Source == ProxySourceClash {
+			p.testProxy(i)
+		}
 	}
 	wg.Wait()
 
@@ -68,12 +160,26 @@ func (p *ProxyPool) TestAll() {
 }
 
 func (p *ProxyPool) testProxy(idx int) {
+	p.mu.RLock()
 	proxy := p.proxies[idx]
+	p.mu.RUnlock()
+
+	if proxy.Source == ProxySourceClash {
+		if err := p.selectClashNode(proxy); err != nil {
+			p.setProxyFailure(proxy.ID, fmt.Sprintf("切换节点失败: %v", err))
+			Printf("  ❌ %s - %s\n", proxy.Node, err)
+			return
+		}
+	}
 
 	proxyURL, err := url.Parse(proxy.URL)
 	if err != nil {
-		proxy.Error = fmt.Sprintf("解析URL失败: %v", err)
-		Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), proxy.Error)
+		p.setProxyFailure(proxy.ID, fmt.Sprintf("解析URL失败: %v", err))
+		if proxy.Source == ProxySourceClash {
+			Printf("  ❌ %s - %s\n", proxy.Node, err)
+		} else {
+			Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), err)
+		}
 		return
 	}
 
@@ -91,15 +197,19 @@ func (p *ProxyPool) testProxy(idx int) {
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://auth.openai.com/", nil)
 	if err != nil {
-		proxy.Error = err.Error()
+		p.setProxyFailure(proxy.ID, err.Error())
 		return
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		proxy.Error = fmt.Sprintf("连接失败: %v", err)
-		Printf("  ❌ %s - %s\n", maskProxyURL(proxy.URL), proxy.Error)
+		p.setProxyFailure(proxy.ID, fmt.Sprintf("连接失败: %v", err))
+		if proxy.Source == ProxySourceClash {
+			Printf("  ❌ %s - %v\n", proxy.Node, err)
+		} else {
+			Printf("  ❌ %s - %v\n", maskProxyURL(proxy.URL), err)
+		}
 		return
 	}
 	defer resp.Body.Close()
@@ -108,6 +218,9 @@ func (p *ProxyPool) testProxy(idx int) {
 	proxy.Available = true
 	proxy.LastCheck = time.Now()
 	proxy.Error = ""
+	proxy.IP = ""
+	proxy.Country = ""
+	proxy.City = ""
 	if ipInfo != "" {
 		if idx := strings.Index(ipInfo, " ("); idx > 0 {
 			proxy.IP = ipInfo[:idx]
@@ -118,10 +231,32 @@ func (p *ProxyPool) testProxy(idx int) {
 	}
 	p.mu.Unlock()
 
+	if proxy.Source == ProxySourceClash {
+		if ipInfo != "" {
+			Printf("  ✅ Clash[%s] → %s\n", proxy.Node, ipInfo)
+		} else {
+			Printf("  ✅ Clash[%s] (可用，状态: %d)\n", proxy.Node, resp.StatusCode)
+		}
+		return
+	}
+
 	if ipInfo != "" {
 		Printf("  ✅ %s → %s\n", maskProxyURL(proxy.URL), ipInfo)
 	} else {
 		Printf("  ✅ %s (可用，状态: %d)\n", maskProxyURL(proxy.URL), resp.StatusCode)
+	}
+}
+
+func (p *ProxyPool) setProxyFailure(proxyID, message string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, proxy := range p.proxies {
+		if proxy.ID == proxyID {
+			proxy.Available = false
+			proxy.Error = message
+			proxy.LastCheck = time.Now()
+			return
+		}
 	}
 }
 
@@ -145,11 +280,11 @@ func (p *ProxyPool) getProxyIP(client *http.Client) string {
 	return ""
 }
 
-func (p *ProxyPool) tryGetIP(client *http.Client, url string) string {
+func (p *ProxyPool) tryGetIP(client *http.Client, rawURL string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return ""
 	}
@@ -218,32 +353,83 @@ func (p *ProxyPool) getIPLocation(ip string) string {
 	return ""
 }
 
-func (p *ProxyPool) GetNext() string {
+func (p *ProxyPool) GetNextAssignment() *ProxyAssignment {
+	p.mu.RLock()
+	total := len(p.proxies)
+	p.mu.RUnlock()
+	if total == 0 {
+		return nil
+	}
+
+	for range total {
+		candidate := p.nextAvailable()
+		if candidate == nil {
+			break
+		}
+		if candidate.Source == ProxySourceClash {
+			if err := p.selectClashNode(candidate); err != nil {
+				p.setProxyFailure(candidate.ID, fmt.Sprintf("切换节点失败: %v", err))
+				continue
+			}
+		}
+		return p.toAssignment(candidate)
+	}
+
+	return nil
+}
+
+func (p *ProxyPool) nextAvailable() *ProxyStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if len(p.proxies) == 0 {
-		return ""
+		return nil
 	}
 
-	startIdx := p.index
+	start := p.index
 	for {
 		proxy := p.proxies[p.index]
 		p.index = (p.index + 1) % len(p.proxies)
-
 		if proxy.Available {
-			return proxy.URL
+			return proxy
 		}
-
-		if p.index == startIdx {
-			for _, pr := range p.proxies {
-				if pr.Available {
-					return pr.URL
-				}
-			}
-			return p.proxies[0].URL
+		if p.index == start {
+			return nil
 		}
 	}
+}
+
+func (p *ProxyPool) toAssignment(proxy *ProxyStatus) *ProxyAssignment {
+	if proxy == nil {
+		return nil
+	}
+	return &ProxyAssignment{
+		ID:       proxy.ID,
+		Source:   proxy.Source,
+		ProxyURL: proxy.URL,
+		Node:     proxy.Node,
+		Group:    proxy.Group,
+	}
+}
+
+func (p *ProxyPool) selectClashNode(proxy *ProxyStatus) error {
+	if proxy == nil || proxy.Source != ProxySourceClash {
+		return nil
+	}
+	if p.clash == nil {
+		return fmt.Errorf("clash 客户端未初始化")
+	}
+	p.clashSelect.Lock()
+	defer p.clashSelect.Unlock()
+	return p.clash.SelectNode(proxy.Group, proxy.Node)
+}
+
+func (p *ProxyPool) GetNext() string {
+	assignment := p.GetNextAssignment()
+	if assignment == nil {
+		return ""
+	}
+	return assignment.ProxyURL
 }
 
 func (p *ProxyPool) GetAvailableCount() int {
@@ -267,9 +453,186 @@ func (p *ProxyPool) MarkFailed(proxyURL string) {
 		if proxy.URL == proxyURL {
 			proxy.Available = false
 			proxy.Error = "注册失败"
+			proxy.LastCheck = time.Now()
 			break
 		}
 	}
+}
+
+func (p *ProxyPool) MarkFailedAssignment(assignment *ProxyAssignment) {
+	if assignment == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, proxy := range p.proxies {
+		if proxy.ID == assignment.ID {
+			proxy.Available = false
+			proxy.Error = "注册失败"
+			proxy.LastCheck = time.Now()
+			return
+		}
+	}
+}
+
+func normalizeProxyURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("为空")
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "http://" + trimmed
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("缺少 host")
+	}
+	if parsed.Scheme == "" {
+		parsed.Scheme = "http"
+	}
+	return parsed.String(), nil
+}
+
+func newClashClient(externalController, secret string) (*clashClient, error) {
+	baseURL, err := normalizeProxyURL(externalController)
+	if err != nil {
+		return nil, fmt.Errorf("clash.external_controller 无效: %w", err)
+	}
+	return &clashClient{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		secret:     strings.TrimSpace(secret),
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}, nil
+}
+
+func (c *clashClient) ListGroupNodes(group string, include, exclude []string) ([]string, error) {
+	respBody, err := c.doJSON(http.MethodGet, c.baseURL+"/proxies", nil)
+	if err != nil {
+		return nil, fmt.Errorf("获取 clash 节点失败: %w", err)
+	}
+
+	var data struct {
+		Proxies map[string]struct {
+			Type string   `json:"type"`
+			All  []string `json:"all"`
+		} `json:"proxies"`
+	}
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("解析 clash 节点失败: %w", err)
+	}
+
+	groupProxy, ok := data.Proxies[group]
+	if !ok {
+		return nil, fmt.Errorf("clash 代理组 %q 不存在", group)
+	}
+
+	filtered := filterNodeNames(groupProxy.All, include, exclude)
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("clash 代理组 %q 过滤后无节点", group)
+	}
+
+	return filtered, nil
+}
+
+func (c *clashClient) SelectNode(group, node string) error {
+	body, err := json.Marshal(map[string]string{"name": node})
+	if err != nil {
+		return err
+	}
+	_, err = c.doJSON(http.MethodPut, c.baseURL+"/proxies/"+url.PathEscape(group), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("切换节点 %q 失败: %w", node, err)
+	}
+	return nil
+}
+
+func (c *clashClient) doJSON(method, rawURL string, body io.Reader) ([]byte, error) {
+	req, err := http.NewRequest(method, rawURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if method == http.MethodPut {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+c.secret)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+	}
+
+	return respBody, nil
+}
+
+func filterNodeNames(nodes, include, exclude []string) []string {
+	includeLower := make([]string, 0, len(include))
+	for _, item := range include {
+		if trimmed := strings.TrimSpace(strings.ToLower(item)); trimmed != "" {
+			includeLower = append(includeLower, trimmed)
+		}
+	}
+
+	excludeLower := make([]string, 0, len(exclude))
+	for _, item := range exclude {
+		if trimmed := strings.TrimSpace(strings.ToLower(item)); trimmed != "" {
+			excludeLower = append(excludeLower, trimmed)
+		}
+	}
+
+	filtered := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		name := strings.TrimSpace(node)
+		if name == "" {
+			continue
+		}
+		lower := strings.ToLower(name)
+
+		if len(includeLower) > 0 {
+			matched := false
+			for _, keyword := range includeLower {
+				if strings.Contains(lower, keyword) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		excluded := false
+		for _, keyword := range excludeLower {
+			if strings.Contains(lower, keyword) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+
+		filtered = append(filtered, name)
+	}
+
+	return filtered
 }
 
 func maskProxyURL(proxyURL string) string {
@@ -298,7 +661,6 @@ type ProxyTestResult struct {
 	Error     string
 }
 
-// TestSingleProxy tests a single proxy URL and returns the result.
 func TestSingleProxy(proxyURL string) *ProxyTestResult {
 	result := &ProxyTestResult{}
 
