@@ -8,15 +8,26 @@ import (
 	"strings"
 )
 
+// ClashConfig holds optional Clash proxy configuration.
+type ClashConfig struct {
+	ExternalController string   `json:"external_controller"`
+	Secret             string   `json:"secret"`
+	ProxyGroup         string   `json:"proxy_group"`
+	MixedProxy         string   `json:"mixed_proxy"`
+	Include            []string `json:"include"`
+	Exclude            []string `json:"exclude"`
+}
+
 type Config struct {
-	Proxy      string   `json:"proxy"`
-	Proxies    []string `json:"proxies"`
-	Headless   bool     `json:"headless"`
-	Timeout    int      `json:"timeout"`
-	Debug      bool     `json:"debug"`
-	OutputDir  string   `json:"output_dir"`
-	ConvertDir string   `json:"convert_dir"`
-	Count      int      `json:"count"`
+	Proxy      string       `json:"proxy"`
+	Proxies    []string     `json:"proxies"`
+	Headless   bool         `json:"headless"`
+	Timeout    int          `json:"timeout"`
+	Debug      bool         `json:"debug"`
+	OutputDir  string       `json:"output_dir"`
+	ConvertDir string       `json:"convert_dir"`
+	Count      int          `json:"count"`
+	Clash      *ClashConfig `json:"clash,omitempty"`
 }
 
 func DefaultConfig() *Config {

@@ -136,3 +136,88 @@ func TestLoadConfigInvalidJSON(t *testing.T) {
 		t.Fatalf("expected error for invalid json")
 	}
 }
+
+func TestDefaultConfigClashIsNil(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Clash != nil {
+		t.Fatalf("expected Clash to be nil for backward compatibility, got %+v", cfg.Clash)
+	}
+}
+
+func TestSaveAndLoadConfigWithClashRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	original := &Config{
+		Proxy:     "http://127.0.0.1:7890",
+		Headless:  true,
+		Timeout:   60,
+		OutputDir: "./creds",
+		Count:     1,
+		Clash: &ClashConfig{
+			ExternalController: "127.0.0.1:9090",
+			Secret:             "my-secret",
+			ProxyGroup:         "PROXY",
+			MixedProxy:         "127.0.0.1:7890",
+			Include:            []string{"HK", "US"},
+			Exclude:            []string{"JP"},
+		},
+	}
+
+	if err := SaveConfig(original, path); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	if loaded.Clash == nil {
+		t.Fatalf("expected Clash config, got nil")
+	}
+	if loaded.Clash.ExternalController != original.Clash.ExternalController {
+		t.Fatalf("external_controller mismatch: got %s, want %s", loaded.Clash.ExternalController, original.Clash.ExternalController)
+	}
+	if loaded.Clash.Secret != original.Clash.Secret {
+		t.Fatalf("secret mismatch: got %s, want %s", loaded.Clash.Secret, original.Clash.Secret)
+	}
+	if loaded.Clash.ProxyGroup != original.Clash.ProxyGroup {
+		t.Fatalf("proxy_group mismatch: got %s, want %s", loaded.Clash.ProxyGroup, original.Clash.ProxyGroup)
+	}
+	if loaded.Clash.MixedProxy != original.Clash.MixedProxy {
+		t.Fatalf("mixed_proxy mismatch: got %s, want %s", loaded.Clash.MixedProxy, original.Clash.MixedProxy)
+	}
+	if len(loaded.Clash.Include) != len(original.Clash.Include) {
+		t.Fatalf("include length mismatch: got %d, want %d", len(loaded.Clash.Include), len(original.Clash.Include))
+	}
+	for i := range original.Clash.Include {
+		if loaded.Clash.Include[i] != original.Clash.Include[i] {
+			t.Fatalf("include[%d] mismatch: got %s, want %s", i, loaded.Clash.Include[i], original.Clash.Include[i])
+		}
+	}
+	if len(loaded.Clash.Exclude) != len(original.Clash.Exclude) {
+		t.Fatalf("exclude length mismatch: got %d, want %d", len(loaded.Clash.Exclude), len(original.Clash.Exclude))
+	}
+	for i := range original.Clash.Exclude {
+		if loaded.Clash.Exclude[i] != original.Clash.Exclude[i] {
+			t.Fatalf("exclude[%d] mismatch: got %s, want %s", i, loaded.Clash.Exclude[i], original.Clash.Exclude[i])
+		}
+	}
+}
+
+func TestLoadConfigWithoutClashPreservesNil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := []byte(`{"proxy":"http://127.0.0.1:8080","timeout":60,"count":1}`)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	if loaded.Clash != nil {
+		t.Fatalf("expected Clash to be nil when not in config, got %+v", loaded.Clash)
+	}
+}

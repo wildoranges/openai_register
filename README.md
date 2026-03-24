@@ -253,7 +253,7 @@ cp config.json.example config.json
 
 **多代理轮换配置：**
 
-当配置多个代理时，系统会在每次注册时随机选择一个代理，适用于需要大量注册的场景：
+当配置多个静态代理时，系统会先启动探活，随后在可用代理之间按顺序轮换，适用于需要大量注册的场景：
 
 ```json
 {
@@ -265,6 +265,44 @@ cp config.json.example config.json
 }
 ```
 
+**Clash 代理池配置：**
+
+如果你本机或远端已经运行 Clash / Mihomo，并暴露了 External Controller，可以直接读取指定代理组中的节点构建代理池。程序会：
+
+1. 通过 `external_controller` 读取 `proxy_group` 下的节点列表
+2. 按 `include` / `exclude` 对节点名做关键字过滤
+3. 启动时逐个切换并探活，只保留可用节点
+4. 注册时在可用节点之间轮换；某个节点在注册过程中出现网络类错误时，会自动标记为失败并跳过
+
+```json
+{
+  "headless": true,
+  "timeout": 600,
+  "debug": false,
+  "output_dir": "creds",
+  "convert_dir": "~/.cli-proxy-api",
+  "count": 5,
+  "clash": {
+    "external_controller": "http://127.0.0.1:9090",
+    "secret": "",
+    "proxy_group": "US",
+    "mixed_proxy": "http://127.0.0.1:7890",
+    "include": ["美国"],
+    "exclude": ["DIRECT", "REJECT"]
+  }
+}
+```
+
+**Clash 参数说明：**
+- `external_controller`：Clash / Mihomo API 地址，支持 `http://host:port`
+- `secret`：External Controller 的访问密钥，没有可留空
+- `proxy_group`：要轮换的代理组名称，例如 `US`、`Proxy`、`GLOBAL`
+- `mixed_proxy`：真正承载流量的统一代理入口，必须是完整 URL；若你的入口带认证，也直接写完整认证 URL
+- `include`：仅保留节点名中包含任一关键字的节点，例如 `美国`、`HK`、`住宅`
+- `exclude`：排除节点名中包含关键字的节点，通常建议排掉 `DIRECT`、`REJECT`
+
+> **注意：** `mixed_proxy` 用于实际网络流量，`external_controller` 只负责切换节点；两者不是同一个概念。
+
 **无需认证的代理：**
 
 ```json
@@ -274,14 +312,18 @@ cp config.json.example config.json
 ```
 
 **代理选择优先级：**
-1. 如果配置了 `proxies`（数组），系统会从中随机选择
+1. 如果配置了 `proxies`（数组），系统会优先使用静态代理池
 2. 如果未配置 `proxies`，则使用 `proxy`（单个代理）
-3. 如果两者都未配置，则直连（不推荐）
+3. 如果前两者都未配置，但配置了 `clash`，则使用 Clash 代理池
+4. 如果以上都未配置，则直连（不推荐）
+
+> **注意：** `proxies` 和 `proxy` 的优先级都高于 `clash`。如果它们同时存在，程序会忽略 `clash` 配置。
 
 **推荐配置：**
 - 使用干净的住宅代理 IP，避免数据中心 IP 被 Cloudflare 标记
 - 确保代理支持 HTTPS
 - 如果使用多代理，建议配置 3-5 个代理进行轮换
+- 如果使用 Clash，先确认 `proxy_group` 在 `/proxies` API 中真实存在，再配置 `include` / `exclude` 过滤
 
 ```bash
 # 构建
@@ -377,17 +419,25 @@ crontab -e
 
 #### WebMail 模式（推荐）
 
-当 API 配额用完时，可使用 WebMail 模式：
+当 API 配额用完、公共配额返回 `Daily quota exceeded`，或者你希望邮箱获取与 OTP 检查都走浏览器时，可使用 WebMail 模式：
 
 ```bash
 # 使用 WebMail 模式（通过浏览器获取临时邮箱）
 xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register --webmail 5
+
+# 配合自定义配置文件（例如 Clash 代理池）
+xvfb-run -a --server-args="-screen 0 1920x1080x24" timeout 1500 ./openai-register --webmail --config ./config.json 5
 ```
 
 **WebMail 模式优势：**
 - 绕过 API 配额限制
 - 同时支持获取邮箱和检查验证码
 - 更稳定可靠
+
+**已验证的运行特性：**
+- WebMail 模式可以与单代理、静态代理池、Clash 代理池一起使用
+- 如果某次尝试分配到了显式代理，该代理会同时用于浏览器启动和 OAuth token 兑换
+- 当注册阶段返回 `registration_disallowed` 但账号已存在时，程序会自动回退到登录流程并继续获取凭证
 
 ### 1.6 工作流程
 
