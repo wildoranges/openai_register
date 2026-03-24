@@ -4,5 +4,6 @@
   "timeout": 600,
   "debug": false,
   "output_dir": "creds",
+  "convert_dir": "~/.cli-proxy-api",
   "count": 1
 }

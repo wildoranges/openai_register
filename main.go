@@ -93,6 +93,9 @@ func main() {
 
 	Printf("无头模式: %v\n", config.Headless)
 	Printf("输出目录: %s\n", config.OutputDir)
+	if config.ConvertDir != "" {
+		Printf("转换目录: %s\n", config.ConvertDir)
+	}
 	if webmailMode {
 		Println("邮箱模式: WebMail (浏览器获取临时邮箱)")
 	}
@@ -292,6 +295,12 @@ func main() {
 			}
 			if err := SaveCredentialsWithDir(credentials, config.OutputDir); err != nil {
 				Printf("保存凭证失败: %v\n", err)
+			}
+
+			if config.ConvertDir != "" {
+				if err := ConvertCredentialToCLIProxy(credentials, config.ConvertDir); err != nil {
+					Printf("转换 CLIProxyAPI 格式失败: %v\n", err)
+				}
 			}
 
 			Println("\n=== 注册成功 ===")

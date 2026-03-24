@@ -22,19 +22,6 @@ type Credential struct {
 	CreatedAt    string `json:"created_at"`
 }
 
-// AuthJSON auth.json 格式（单账户）
-type AuthJSON struct {
-	AuthMode     string `json:"auth_mode"`
-	OPENAIAPIKey string `json:"OPENAI_API_KEY"`
-	Tokens       struct {
-		IDToken      string `json:"id_token"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		AccountID    string `json:"account_id"`
-	} `json:"tokens"`
-	LastRefresh string `json:"last_refresh"`
-}
-
 // CLIProxyCredential CLIProxyAPI 要求的凭证格式
 type CLIProxyCredential struct {
 	IDToken      string `json:"id_token"`
@@ -47,124 +34,55 @@ type CLIProxyCredential struct {
 	Expired      string `json:"expired"`
 }
 
-// JWTPayload JWT payload 结构
-type JWTPayload struct {
-	Exp   int64  `json:"exp"`
-	Iat   int64  `json:"iat"`
-	Email string `json:"email"`
-	Auth  struct {
-		AccountID string `json:"chatgpt_account_id"`
-	} `json:"https://api.openai.com/auth"`
-}
-
 // decodeJWTPayload 解码 JWT payload（不验证签名）
-func decodeJWTPayload(token string) (*JWTPayload, error) {
+func decodeJWTPayload(token string) (map[string]interface{}, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("无效的 JWT 格式")
+		return nil, fmt.Errorf("invalid JWT format")
 	}
 
 	payload := parts[1]
-
-	// 添加必要的 padding
 	if l := len(payload) % 4; l > 0 {
 		payload += strings.Repeat("=", 4-l)
 	}
 
 	decoded, err := base64.URLEncoding.DecodeString(payload)
 	if err != nil {
-		// 尝试标准编码
 		decoded, err = base64.StdEncoding.DecodeString(payload)
 		if err != nil {
-			return nil, fmt.Errorf("base64 解码失败: %v", err)
+			return nil, fmt.Errorf("base64 decode failed: %v", err)
 		}
 	}
 
-	var jwtPayload JWTPayload
-	if err := json.Unmarshal(decoded, &jwtPayload); err != nil {
-		return nil, fmt.Errorf("JSON 解析失败: %v", err)
+	var result map[string]interface{}
+	if err := json.Unmarshal(decoded, &result); err != nil {
+		return nil, fmt.Errorf("JSON parse failed: %v", err)
 	}
 
-	return &jwtPayload, nil
-}
-
-// detectFormat 检测输入文件格式
-func detectFormat(data []byte) (string, error) {
-	var arr []json.RawMessage
-	if err := json.Unmarshal(data, &arr); err == nil {
-		return "array", nil
-	}
-
-	var obj map[string]interface{}
-	if err := json.Unmarshal(data, &obj); err == nil {
-		if _, ok := obj["tokens"]; ok {
-			return "auth_json", nil
-		}
-		return "", fmt.Errorf("未知对象格式")
-	}
-	return "", fmt.Errorf("无法解析 JSON")
-}
-
-// parseAuthJSON 解析 auth.json 格式
-func parseAuthJSON(data []byte) (*Credential, error) {
-	var auth AuthJSON
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return nil, fmt.Errorf("JSON 解析失败: %v", err)
-	}
-
-	cred := &Credential{
-		AccessToken:  auth.Tokens.AccessToken,
-		RefreshToken: auth.Tokens.RefreshToken,
-		IDToken:      auth.Tokens.IDToken,
-		UserID:       auth.Tokens.AccountID,
-		CreatedAt:    auth.LastRefresh,
-	}
-
-	// 从 id_token 提取 email
-	if auth.Tokens.IDToken != "" {
-		if payload, err := decodeJWTPayload(auth.Tokens.IDToken); err == nil && payload.Email != "" {
-			cred.Email = payload.Email
-		}
-	}
-
-	return cred, nil
+	return result, nil
 }
 
 // convertCredentials 转换凭证格式
 func convertCredentials(inputFile, outputDir string) (int, error) {
 	data, err := os.ReadFile(inputFile)
 	if err != nil {
-		return 0, fmt.Errorf("读取文件失败: %v", err)
-	}
-
-	format, err := detectFormat(data)
-	if err != nil {
-		return 0, fmt.Errorf("格式检测失败: %v", err)
+		return 0, fmt.Errorf("read file failed: %v", err)
 	}
 
 	var creds []Credential
-	switch format {
-	case "array":
-		if err := json.Unmarshal(data, &creds); err != nil {
-			return 0, fmt.Errorf("JSON 解析失败: %v", err)
-		}
-	case "auth_json":
-		cred, err := parseAuthJSON(data)
-		if err != nil {
-			return 0, err
-		}
-		creds = []Credential{*cred}
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return 0, fmt.Errorf("parse JSON failed: %v", err)
 	}
 
 	if len(creds) == 0 {
-		return 0, fmt.Errorf("凭证文件为空")
+		return 0, fmt.Errorf("no credentials found")
 	}
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return 0, fmt.Errorf("创建目录失败: %v", err)
+		return 0, fmt.Errorf("create directory failed: %v", err)
 	}
 
-	fmt.Printf("输入文件: %s (格式: %s)\n", inputFile, format)
+	fmt.Printf("输入文件: %s\n", inputFile)
 	fmt.Printf("输出目录: %s\n", outputDir)
 	fmt.Printf("凭证数量: %d\n", len(creds))
 	fmt.Println(strings.Repeat("-", 50))
@@ -181,13 +99,11 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 			continue
 		}
 
-		// 解码 JWT
 		payload, err := decodeJWTPayload(cred.AccessToken)
 		if err != nil {
 			fmt.Printf("[%d] 警告 %s: JWT 解码失败: %v\n", i+1, email, err)
 		}
 
-		// 构建 CLIProxyAPI 格式
 		cliproxyCred := CLIProxyCredential{
 			IDToken:      cred.IDToken,
 			AccessToken:  cred.AccessToken,
@@ -207,17 +123,20 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 			refreshInfo = "✗无refresh"
 		}
 		if payload != nil {
-			cliproxyCred.AccountID = payload.Auth.AccountID
-			if payload.Exp > 0 {
-				cliproxyCred.Expired = time.Unix(payload.Exp, 0).Format(time.RFC3339)
-				ttlDays := float64(payload.Exp-time.Now().Unix()) / 86400
+			if auth, ok := payload["https://api.openai.com/auth"].(map[string]interface{}); ok {
+				if accountID, ok := auth["chatgpt_account_id"].(string); ok {
+					cliproxyCred.AccountID = accountID
+				}
+			}
+			if exp, ok := payload["exp"].(float64); ok && exp > 0 {
+				cliproxyCred.Expired = time.Unix(int64(exp), 0).Format(time.RFC3339)
+				ttlDays := float64(int64(exp)-time.Now().Unix()) / 86400
 				ttlInfo = fmt.Sprintf("(剩余%.1f天)", ttlDays)
 			}
 		}
 
-		// 保存到文件
 		filename := fmt.Sprintf("codex-%s.json", email)
-		filepath := filepath.Join(outputDir, filename)
+		filePath := filepath.Join(outputDir, filename)
 
 		jsonData, err := json.MarshalIndent(cliproxyCred, "", "  ")
 		if err != nil {
@@ -225,7 +144,7 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 			continue
 		}
 
-		if err := os.WriteFile(filepath, jsonData, 0644); err != nil {
+		if err := os.WriteFile(filePath, jsonData, 0644); err != nil {
 			fmt.Printf("[%d] 保存失败: %s - %v\n", i+1, email, err)
 			continue
 		}
@@ -242,12 +161,11 @@ func convertCredentials(inputFile, outputDir string) (int, error) {
 }
 
 func main() {
-	// 默认路径
 	scriptDir, _ := os.Getwd()
 	defaultInput := filepath.Join(scriptDir, "creds", "openai_credentials.json")
-	defaultOutput := filepath.Join(os.Getenv("HOME"), ".cli-proxy-api")
+	home, _ := os.UserHomeDir()
+	defaultOutput := filepath.Join(home, ".cli-proxy-api")
 
-	// 解析命令行参数
 	inputFile := defaultInput
 	outputDir := defaultOutput
 
@@ -258,6 +176,5 @@ func main() {
 		outputDir = os.Args[2]
 	}
 
-	// 执行转换
 	convertCredentials(inputFile, outputDir)
 }
