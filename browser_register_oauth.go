@@ -76,10 +76,6 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password, otp string) (
 	}
 	Printf("使用浏览器: %s\n", path)
 
-	if br.config.Proxy != "" {
-		Printf("使用代理: %s\n", br.config.Proxy)
-	}
-
 	l := launcher.New().Bin(path).Headless(br.config.Headless).
 		Set("no-sandbox", "true").
 		Set("disable-blink-features", "AutomationControlled").
@@ -92,27 +88,12 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password, otp string) (
 		Set("user-agent", fingerprint.UserAgent).
 		Set("lang", strings.Split(fingerprint.AcceptLanguage, ",")[0])
 
-	var localProxy *LocalProxyForwarder
-	if br.config.Proxy != "" {
-		proxyURL, err := url.Parse(br.config.Proxy)
-		if err == nil {
-			if proxyURL.User != nil {
-				Println("代理需要认证，启动本地转发器...")
-				localProxy, err = NewLocalProxyForwarder(br.config.Proxy)
-				if err != nil {
-					return nil, fmt.Errorf("创建本地代理失败: %v", err)
-				}
-				localAddr, err := localProxy.Start()
-				if err != nil {
-					return nil, fmt.Errorf("启动本地代理失败: %v", err)
-				}
-				Printf("本地代理已启动: %s\n", localAddr)
-				l = l.Set("proxy-server", localAddr)
-				defer localProxy.Stop()
-			} else {
-				l = l.Set("proxy-server", proxyURL.Host)
-			}
-		}
+	l, localProxy, err := br.applyLauncherProxy(l)
+	if err != nil {
+		return nil, err
+	}
+	if localProxy != nil {
+		defer localProxy.Stop()
 	}
 
 	u, err := l.Launch()
@@ -251,10 +232,6 @@ func (br *BrowserRegisterOAuth) LoginWithOAuth(email, password, otp string) (*Ac
 	}
 	Printf("使用浏览器: %s\n", path)
 
-	if br.config.Proxy != "" {
-		Printf("使用代理: %s\n", br.config.Proxy)
-	}
-
 	l := launcher.New().Bin(path).Headless(br.config.Headless).
 		Set("no-sandbox", "true").
 		Set("disable-blink-features", "AutomationControlled").
@@ -267,27 +244,12 @@ func (br *BrowserRegisterOAuth) LoginWithOAuth(email, password, otp string) (*Ac
 		Set("user-agent", fingerprint.UserAgent).
 		Set("lang", strings.Split(fingerprint.AcceptLanguage, ",")[0])
 
-	var localProxy *LocalProxyForwarder
-	if br.config.Proxy != "" {
-		proxyURL, err := url.Parse(br.config.Proxy)
-		if err == nil {
-			if proxyURL.User != nil {
-				Println("代理需要认证，启动本地转发器...")
-				localProxy, err = NewLocalProxyForwarder(br.config.Proxy)
-				if err != nil {
-					return nil, fmt.Errorf("启动本地代理转发器失败: %v", err)
-				}
-				localAddr, err := localProxy.Start()
-				if err != nil {
-					return nil, fmt.Errorf("启动本地代理失败: %v", err)
-				}
-				Printf("本地代理已启动: %s\n", localAddr)
-				l = l.Set("proxy-server", localAddr)
-				defer localProxy.Stop()
-			} else {
-				l = l.Set("proxy-server", proxyURL.Host)
-			}
-		}
+	l, localProxy, err := br.applyLauncherProxy(l)
+	if err != nil {
+		return nil, err
+	}
+	if localProxy != nil {
+		defer localProxy.Stop()
 	}
 
 	uri, err := l.Launch()
@@ -1027,7 +989,7 @@ func (br *BrowserRegisterOAuth) exchangeCodeForTokens(code, codeVerifier, redire
 
 	Println("正在用 authorization code 兑换 Token...")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := br.newProxyAwareHTTPClient(30 * time.Second)
 	req, err := http.NewRequest("POST", OAuthTokenURL, bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %v", err)
