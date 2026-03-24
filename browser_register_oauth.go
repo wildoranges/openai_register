@@ -317,26 +317,6 @@ func (br *BrowserRegisterOAuth) LoginWithOAuth(email, password, otp string) (*Ac
 		return nil, err
 	}
 
-	accessToken, userID := br.getAccessToken(page)
-	if accessToken != "" {
-		Println("直接获取 Token 成功!")
-		Println(strings.Repeat("=", 60))
-		Printf("邮箱:          %s\n", email)
-		if len(accessToken) > 40 {
-			Printf("Access Token:  %s...\n", accessToken[:40])
-		}
-
-		credentials := &AccountCredentials{
-			Email:       email,
-			Password:    password,
-			AccessToken: accessToken,
-			UserID:      userID,
-			ExpiresIn:   86400,
-			CreatedAt:   time.Now(),
-		}
-		return credentials, nil
-	}
-
 	Println(">>> 等待 OAuth 回调 (最长 60 秒)...")
 	result := br.oauthServer.WaitForResult(60 * time.Second)
 
