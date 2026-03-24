@@ -445,6 +445,46 @@ func (p *ProxyPool) GetAvailableCount() int {
 	return count
 }
 
+func (p *ProxyPool) PrintPoolSummary() {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if len(p.proxies) == 0 {
+		return
+	}
+
+	Println("\n📊 代理池最终状态:")
+	Println("====================================")
+
+	available := 0
+	failed := 0
+	for _, proxy := range p.proxies {
+		if proxy.Available {
+			available++
+		} else {
+			failed++
+		}
+	}
+
+	Printf("总节点数: %d | 可用: %d | 失败: %d\n", len(p.proxies), available, failed)
+	Println("------------------------------------")
+
+	for _, proxy := range p.proxies {
+		status := "✅ 可用"
+		if !proxy.Available {
+			status = "❌ 失败"
+		}
+
+		if proxy.Source == ProxySourceClash {
+			Printf("  %s Clash[%s/%s] %s\n", status, proxy.Group, proxy.Node, proxy.Error)
+		} else {
+			Printf("  %s %s %s\n", status, maskProxyURL(proxy.URL), proxy.Error)
+		}
+	}
+
+	Println("====================================")
+}
+
 func (p *ProxyPool) MarkFailed(proxyURL string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -454,9 +494,18 @@ func (p *ProxyPool) MarkFailed(proxyURL string) {
 			proxy.Available = false
 			proxy.Error = "注册失败"
 			proxy.LastCheck = time.Now()
+			Printf("⚠️ 代理标记为失败: %s\n", maskProxyURL(proxyURL))
 			break
 		}
 	}
+
+	available := 0
+	for _, proxy := range p.proxies {
+		if proxy.Available {
+			available++
+		}
+	}
+	Printf("📊 代理池状态: %d/%d 可用\n", available, len(p.proxies))
 }
 
 func (p *ProxyPool) MarkFailedAssignment(assignment *ProxyAssignment) {
@@ -472,9 +521,18 @@ func (p *ProxyPool) MarkFailedAssignment(assignment *ProxyAssignment) {
 			proxy.Available = false
 			proxy.Error = "注册失败"
 			proxy.LastCheck = time.Now()
-			return
+			Printf("⚠️ 代理标记为失败: %s\n", assignment.Label())
+			break
 		}
 	}
+
+	available := 0
+	for _, proxy := range p.proxies {
+		if proxy.Available {
+			available++
+		}
+	}
+	Printf("📊 代理池状态: %d/%d 可用\n", available, len(p.proxies))
 }
 
 func normalizeProxyURL(raw string) (string, error) {

@@ -346,6 +346,7 @@ func main() {
 
 			if regErr != nil || credentials == nil {
 				if proxyPool != nil && shouldMarkProxyFailed(regErr) {
+					Printf("🔍 检测到代理相关错误，标记当前代理为失败: %v\n", regErr)
 					if currentAssignment != nil {
 						proxyPool.MarkFailedAssignment(currentAssignment)
 					} else {
@@ -389,6 +390,10 @@ func main() {
 			}
 		}
 		Printf("\n成功注册账号数: %d/%d\n", successCount, count)
+
+		if proxyPool != nil {
+			proxyPool.PrintPoolSummary()
+		}
 	}
 
 	fmt.Println("\n====================================")
