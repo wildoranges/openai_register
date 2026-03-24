@@ -39,15 +39,64 @@ func TestProxyPoolStaticRoundRobinAndFailureMarking(t *testing.T) {
 	}
 }
 
-func TestProxyPoolGetNextAssignmentReturnsNilWhenExhausted(t *testing.T) {
+func TestProxyPoolReactivatesAllRuntimeFailedAssignmentsWhenExhausted(t *testing.T) {
 	pool := NewProxyPool([]string{"http://proxy-a:8001", "http://proxy-b:8002"})
 	for _, p := range pool.proxies {
-		p.Available = false
+		p.Available = true
 	}
 
+	first := pool.GetNextAssignment()
+	if first == nil || first.ProxyURL != "http://proxy-a:8001" {
+		t.Fatalf("unexpected first assignment: %+v", first)
+	}
+	second := pool.GetNextAssignment()
+	if second == nil || second.ProxyURL != "http://proxy-b:8002" {
+		t.Fatalf("unexpected second assignment: %+v", second)
+	}
+
+	pool.MarkFailedAssignment(first)
+	pool.MarkFailedAssignment(second)
+
+	reactivated := pool.GetNextAssignment()
+	if reactivated == nil {
+		t.Fatalf("expected recycled assignment after full runtime exhaustion")
+	}
+	if reactivated.ProxyURL != "http://proxy-a:8001" {
+		t.Fatalf("expected round-robin to resume with proxy-a, got %+v", reactivated)
+	}
+	if !pool.proxies[0].Available || !pool.proxies[1].Available {
+		t.Fatalf("expected all runtime-failed proxies to be reactivated")
+	}
+	if pool.proxies[0].RuntimeDisabled || pool.proxies[1].RuntimeDisabled {
+		t.Fatalf("expected runtime-disabled markers to be cleared after reactivation")
+	}
+}
+
+func TestProxyPoolGetNextAssignmentKeepsStartupFailedProxiesDisabled(t *testing.T) {
+	pool := NewProxyPool([]string{"http://proxy-a:8001", "http://proxy-b:8002"})
+	pool.proxies[0].Available = false
+	pool.proxies[0].Error = "启动探活失败"
+	pool.proxies[1].Available = true
+
 	assignment := pool.GetNextAssignment()
-	if assignment != nil {
-		t.Fatalf("expected nil assignment when all proxies are unavailable, got %+v", assignment)
+	if assignment == nil || assignment.ProxyURL != "http://proxy-b:8002" {
+		t.Fatalf("expected available proxy-b assignment, got %+v", assignment)
+	}
+
+	pool.MarkFailedAssignment(assignment)
+
+	recycled := pool.GetNextAssignment()
+	if recycled == nil {
+		t.Fatalf("expected runtime-failed proxy-b to be reactivated")
+	}
+	if recycled.ProxyURL != "http://proxy-b:8002" {
+		t.Fatalf("expected only proxy-b to be recyclable, got %+v", recycled)
+	}
+	if pool.proxies[0].Available {
+		t.Fatalf("expected startup-failed proxy-a to remain unavailable")
+	}
+	if pool.proxies[0].RuntimeDisabled {
+		t.Fatalf("did not expect startup-failed proxy-a to be marked runtime-disabled")
 	}
 }
 

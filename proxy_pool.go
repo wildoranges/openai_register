@@ -19,17 +19,18 @@ const (
 )
 
 type ProxyStatus struct {
-	ID        string
-	Source    string
-	URL       string
-	Node      string
-	Group     string
-	IP        string
-	Country   string
-	City      string
-	Available bool
-	LastCheck time.Time
-	Error     string
+	ID             string
+	Source         string
+	URL            string
+	Node           string
+	Group          string
+	IP             string
+	Country        string
+	City           string
+	Available      bool
+	LastCheck      time.Time
+	Error          string
+	RuntimeDisabled bool
 }
 
 type ProxyAssignment struct {
@@ -260,6 +261,19 @@ func (p *ProxyPool) setProxyFailure(proxyID, message string) {
 	}
 }
 
+func (p *ProxyPool) reactivateRuntimeFailedLocked() int {
+	reactivated := 0
+	for _, proxy := range p.proxies {
+		if proxy.RuntimeDisabled {
+			proxy.Available = true
+			proxy.RuntimeDisabled = false
+			proxy.Error = ""
+			reactivated++
+		}
+	}
+	return reactivated
+}
+
 func (p *ProxyPool) getProxyIP(client *http.Client) string {
 	ipServices := []string{
 		"https://icanhazip.com",
@@ -361,18 +375,28 @@ func (p *ProxyPool) GetNextAssignment() *ProxyAssignment {
 		return nil
 	}
 
-	for range total {
-		candidate := p.nextAvailable()
-		if candidate == nil {
-			break
-		}
-		if candidate.Source == ProxySourceClash {
-			if err := p.selectClashNode(candidate); err != nil {
-				p.setProxyFailure(candidate.ID, fmt.Sprintf("切换节点失败: %v", err))
-				continue
+	for attempt := 0; attempt < 2; attempt++ {
+		for range total {
+			candidate := p.nextAvailable()
+			if candidate == nil {
+				break
 			}
+			if candidate.Source == ProxySourceClash {
+				if err := p.selectClashNode(candidate); err != nil {
+					p.markRuntimeFailure(candidate.ID, fmt.Sprintf("切换节点失败: %v", err))
+					continue
+				}
+			}
+			return p.toAssignment(candidate)
 		}
-		return p.toAssignment(candidate)
+
+		if attempt == 0 {
+			reactivated := p.reactivateRuntimeFailed()
+			if reactivated == 0 {
+				break
+			}
+			Printf("🔄 代理池已全部失败，重新激活 %d 个运行期失败节点后继续尝试\n", reactivated)
+		}
 	}
 
 	return nil
@@ -485,6 +509,26 @@ func (p *ProxyPool) PrintPoolSummary() {
 	Println("====================================")
 }
 
+func (p *ProxyPool) reactivateRuntimeFailed() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reactivateRuntimeFailedLocked()
+}
+
+func (p *ProxyPool) markRuntimeFailure(proxyID, message string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, proxy := range p.proxies {
+		if proxy.ID == proxyID {
+			proxy.Available = false
+			proxy.RuntimeDisabled = true
+			proxy.Error = message
+			proxy.LastCheck = time.Now()
+			return
+		}
+	}
+}
+
 func (p *ProxyPool) MarkFailed(proxyURL string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -492,6 +536,7 @@ func (p *ProxyPool) MarkFailed(proxyURL string) {
 	for _, proxy := range p.proxies {
 		if proxy.URL == proxyURL {
 			proxy.Available = false
+			proxy.RuntimeDisabled = true
 			proxy.Error = "注册失败"
 			proxy.LastCheck = time.Now()
 			Printf("⚠️ 代理标记为失败: %s\n", maskProxyURL(proxyURL))
@@ -519,6 +564,7 @@ func (p *ProxyPool) MarkFailedAssignment(assignment *ProxyAssignment) {
 	for _, proxy := range p.proxies {
 		if proxy.ID == assignment.ID {
 			proxy.Available = false
+			proxy.RuntimeDisabled = true
 			proxy.Error = "注册失败"
 			proxy.LastCheck = time.Now()
 			Printf("⚠️ 代理标记为失败: %s\n", assignment.Label())

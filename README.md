@@ -224,6 +224,7 @@ cp config.json.example config.json
 | `output_dir` | string | 输出目录 | creds |
 | `convert_dir` | string | 额外输出 CLIProxyAPI 格式凭证的目录 | ~/.cli-proxy-api |
 | `count` | int | 注册账号数量 | 1 |
+| `clash` | object | Clash / Mihomo 代理池配置（可选） | 空 |
 
 #### 代理配置详解
 
@@ -302,6 +303,8 @@ cp config.json.example config.json
 - `exclude`：排除节点名中包含关键字的节点，通常建议排掉 `DIRECT`、`REJECT`
 
 > **注意：** `mixed_proxy` 用于实际网络流量，`external_controller` 只负责切换节点；两者不是同一个概念。
+>
+> **补充说明：** 如果运行过程中所有已分配过的节点都暂时失败，程序会自动把“运行期失败”的节点重新激活一轮再继续尝试；但启动探活阶段就失败的节点不会被自动复活。
 
 **无需认证的代理：**
 
