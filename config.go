@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -42,7 +43,41 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
 	}
 
+	config.OutputDir, err = normalizeDirPath(config.OutputDir)
+	if err != nil {
+		return nil, fmt.Errorf("解析 output_dir 失败: %v", err)
+	}
+	config.ConvertDir, err = normalizeDirPath(config.ConvertDir)
+	if err != nil {
+		return nil, fmt.Errorf("解析 convert_dir 失败: %v", err)
+	}
+
 	return config, nil
+}
+
+func normalizeDirPath(dir string) (string, error) {
+	if dir == "" {
+		return "", nil
+	}
+
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if dir == "~" {
+			dir = home
+		} else {
+			dir = filepath.Join(home, strings.TrimPrefix(dir, "~/"))
+		}
+	}
+
+	absPath, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+
+	return absPath, nil
 }
 
 func SaveConfig(config *Config, path string) error {

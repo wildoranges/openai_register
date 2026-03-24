@@ -37,13 +37,14 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 
 	original := &Config{
-		Proxy:     "http://proxy-host:port",
-		Proxies:   []string{"http://proxy1:8080", "http://proxy2:8080"},
-		Headless:  false,
-		Timeout:   42,
-		Debug:     true,
-		OutputDir: "./out",
-		Count:     3,
+		Proxy:      "http://proxy-host:port",
+		Proxies:    []string{"http://proxy1:8080", "http://proxy2:8080"},
+		Headless:   false,
+		Timeout:    42,
+		Debug:      true,
+		OutputDir:  "./out",
+		ConvertDir: "~/.cli-proxy-api",
+		Count:      3,
 	}
 
 	if err := SaveConfig(original, path); err != nil {
@@ -67,8 +68,20 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 	if loaded.Debug != original.Debug {
 		t.Fatalf("debug mismatch: got %v, want %v", loaded.Debug, original.Debug)
 	}
-	if loaded.OutputDir != original.OutputDir {
-		t.Fatalf("output dir mismatch: got %s, want %s", loaded.OutputDir, original.OutputDir)
+	expectedOutputDir, err := filepath.Abs(original.OutputDir)
+	if err != nil {
+		t.Fatalf("abs output dir failed: %v", err)
+	}
+	if loaded.OutputDir != expectedOutputDir {
+		t.Fatalf("output dir mismatch: got %s, want %s", loaded.OutputDir, expectedOutputDir)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("home dir failed: %v", err)
+	}
+	expectedConvertDir := filepath.Join(home, ".cli-proxy-api")
+	if loaded.ConvertDir != expectedConvertDir {
+		t.Fatalf("convert dir mismatch: got %s, want %s", loaded.ConvertDir, expectedConvertDir)
 	}
 	if loaded.Count != original.Count {
 		t.Fatalf("count mismatch: got %d, want %d", loaded.Count, original.Count)
@@ -80,6 +93,35 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 		if loaded.Proxies[i] != original.Proxies[i] {
 			t.Fatalf("proxy[%d] mismatch: got %s, want %s", i, loaded.Proxies[i], original.Proxies[i])
 		}
+	}
+}
+
+func TestLoadConfigNormalizesPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := []byte(`{"output_dir":"./creds","convert_dir":"~/.cli-proxy-api","count":1}`)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	expectedOutputDir, err := filepath.Abs("./creds")
+	if err != nil {
+		t.Fatalf("abs output dir failed: %v", err)
+	}
+	if loaded.OutputDir != expectedOutputDir {
+		t.Fatalf("output dir mismatch: got %s, want %s", loaded.OutputDir, expectedOutputDir)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("home dir failed: %v", err)
+	}
+	expectedConvertDir := filepath.Join(home, ".cli-proxy-api")
+	if loaded.ConvertDir != expectedConvertDir {
+		t.Fatalf("convert dir mismatch: got %s, want %s", loaded.ConvertDir, expectedConvertDir)
 	}
 }
 
