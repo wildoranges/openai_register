@@ -32,6 +32,28 @@ func TestShouldMarkProxyFailed(t *testing.T) {
 	}
 }
 
+func TestShouldMarkProxyFailedOnEmailFetch(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		webmailMode bool
+		want        bool
+	}{
+		{name: "nil", err: nil, webmailMode: true, want: false},
+		{name: "non webmail", err: newTestError("无法从页面获取邮箱地址"), webmailMode: false, want: false},
+		{name: "webmail page email fetch failure", err: newTestError("无法从页面获取邮箱地址"), webmailMode: true, want: true},
+		{name: "webmail unrelated error", err: newTestError("请求超时"), webmailMode: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldMarkProxyFailedOnEmailFetch(tt.err, tt.webmailMode); got != tt.want {
+				t.Fatalf("shouldMarkProxyFailedOnEmailFetch(%v, %v) = %v, want %v", tt.err, tt.webmailMode, got, tt.want)
+			}
+		})
+	}
+}
+
 type testError string
 
 func (e testError) Error() string { return string(e) }

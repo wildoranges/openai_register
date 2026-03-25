@@ -45,6 +45,15 @@ func shouldMarkProxyFailed(err error) bool {
 	return false
 }
 
+func shouldMarkProxyFailedOnEmailFetch(err error, webmailMode bool) bool {
+	if err == nil || !webmailMode {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "无法从页面获取邮箱地址")
+}
+
 func init() {
 	_ = fmt.Sprintf
 }
@@ -296,6 +305,14 @@ func main() {
 				}
 				if err != nil {
 					Printf("获取临时邮箱失败: %v\n", err)
+					if proxyPool != nil && shouldMarkProxyFailedOnEmailFetch(err, webmailMode) {
+						Printf("🔍 WebMail 获取邮箱失败，标记当前代理为失败: %v\n", err)
+						if currentAssignment != nil {
+							proxyPool.MarkFailedAssignment(currentAssignment)
+						} else {
+							proxyPool.MarkFailed(currentProxy)
+						}
+					}
 					if i < count-1 {
 						waitTime := 10 + rand.Intn(10)
 						Printf("\n等待 %d 秒后继续注册下一个账号...\n", waitTime)
