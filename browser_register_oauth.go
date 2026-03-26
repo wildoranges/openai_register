@@ -936,7 +936,9 @@ func (br *BrowserRegisterOAuth) handleOAuthRegistration(page *rod.Page, email, p
 		br.usedOTPs[otpCode] = true
 		br.handleOTPInput(page, otpCode)
 	} else {
-		page.MustNavigate(verifyLink)
+		if err := page.Timeout(30 * time.Second).Navigate(verifyLink); err != nil {
+			return fmt.Errorf("导航到验证链接失败: %v", err)
+		}
 		time.Sleep(5 * time.Second)
 		br.handleCloudflare(page)
 	}

@@ -483,7 +483,9 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 
 			br.handleOTPInput(page, otpCode)
 		} else {
-			page.MustNavigate(verifyLink)
+			if err := page.Timeout(30 * time.Second).Navigate(verifyLink); err != nil {
+				return nil, fmt.Errorf("导航到验证链接失败: %v", err)
+			}
 			time.Sleep(5 * time.Second)
 			br.handleCloudflare(page)
 		}
@@ -786,7 +788,9 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 			// 无法跳过，尝试直接导航到 chatgpt.com 获取 session
 			if i > 5 {
 				Println("无法跳过手机验证，尝试直接获取 session token...")
-				page.MustNavigate("https://chatgpt.com/")
+				if err := page.Timeout(30 * time.Second).Navigate("https://chatgpt.com/"); err != nil {
+					return fmt.Errorf("导航到 chatgpt.com 失败: %v", err)
+				}
 				time.Sleep(3 * time.Second)
 				return nil
 			}
@@ -994,7 +998,9 @@ func (br *BrowserRegister) handlePostVerification(page *rod.Page) error {
 					if err := json.Unmarshal([]byte(bodyStr), &apiResp); err == nil && apiResp.ContinueURL != "" {
 						Printf("获取到 continue_url: %s\n", apiResp.ContinueURL)
 						Println("导航到 continue_url...")
-						page.MustNavigate(apiResp.ContinueURL)
+						if err := page.Timeout(30 * time.Second).Navigate(apiResp.ContinueURL); err != nil {
+							return fmt.Errorf("导航到 continue_url 失败: %v", err)
+						}
 						time.Sleep(3 * time.Second)
 						step = 2
 						continue
