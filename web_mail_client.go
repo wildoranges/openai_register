@@ -335,7 +335,10 @@ func (w *WebMailClient) NavigateToEmail(email string) error {
 	if w.page == nil {
 		return fmt.Errorf("浏览器未启动")
 	}
-	w.page.MustNavigate(url)
+	if err := w.page.Timeout(30 * time.Second).Navigate(url); err != nil {
+		return err
+	}
+	_ = w.page.Timeout(10 * time.Second).WaitLoad()
 	time.Sleep(2 * time.Second)
 	w.closeDialog()
 	return nil
