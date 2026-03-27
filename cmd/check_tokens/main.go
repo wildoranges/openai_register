@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,8 +60,26 @@ func main() {
 		authDir = filepath.Join(home, ".cli-proxy-api")
 	}
 
-	if len(os.Args) > 1 {
-		authDir = os.Args[1]
+	var deleteCode string
+	var autoYes bool
+	flag.StringVar(&deleteCode, "code", "", "指定要删除的HTTP状态码(多个用逗号分隔, 如 401,403 或 refresh,401)")
+	flag.BoolVar(&autoYes, "y", false, "自动确认删除,无需交互")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "用法: %s [选项] [凭证目录]\n\n", os.Args[0])
+		fmt.Fprintln(os.Stderr, "选项:")
+		flag.PrintDefaults()
+		fmt.Fprintln(os.Stderr, "\n示例:")
+		fmt.Fprintln(os.Stderr, "  check_tokens                    # 检测并交互式删除")
+		fmt.Fprintln(os.Stderr, "  check_tokens -code 401          # 删除HTTP 401的凭证")
+		fmt.Fprintln(os.Stderr, "  check_tokens -code 401,403 -y   # 自动删除HTTP 401和403的凭证")
+		fmt.Fprintln(os.Stderr, "  check_tokens -code refresh -y   # 自动删除不能刷新的凭证")
+		fmt.Fprintln(os.Stderr, "  check_tokens -code all -y       # 自动删除所有无效凭证")
+	}
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) > 0 {
+		authDir = args[0]
 	}
 
 	fmt.Println("====================================")
@@ -204,83 +224,78 @@ func main() {
 	fmt.Printf("\n发现 %d 个无效凭证 (不能刷新: %d + Codex验证失败: %d)\n",
 		invalidCount, len(cannotRefresh), codexFailedCount)
 
-	fmt.Printf("\n是否删除这些无效凭证? (不能刷新: %d + Codex验证失败: %d. 错误凭证共 %d 个. 凭证总数共 %d 个) (y/N): ", len(cannotRefresh), codexFailedCount, invalidCount, len(files))
-
+	var toDeleteCannotRefresh bool
+	var codesToDelete []int
 	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(strings.ToLower(input))
 
-	if input == "y" || input == "yes" {
-		deleted := 0
-		for _, r := range cannotRefresh {
-			if err := os.Remove(r.File); err != nil {
-				fmt.Printf("  删除失败 %s: %v\n", filepath.Base(r.File), err)
+	if deleteCode != "" {
+		opts := strings.Split(strings.ToLower(deleteCode), ",")
+		for _, opt := range opts {
+			opt = strings.TrimSpace(opt)
+			if opt == "all" {
+				toDeleteCannotRefresh = true
+				codesToDelete = codexCodes
+				break
+			} else if opt == "refresh" {
+				toDeleteCannotRefresh = true
 			} else {
-				fmt.Printf("  ✓ 已删除: %s\n", filepath.Base(r.File))
-				deleted++
-			}
-		}
-		for _, results := range codexFailed {
-			for _, r := range results {
-				if err := os.Remove(r.File); err != nil {
-					fmt.Printf("  删除失败 %s: %v\n", filepath.Base(r.File), err)
-				} else {
-					fmt.Printf("  ✓ 已删除: %s\n", filepath.Base(r.File))
-					deleted++
+				code, err := strconv.Atoi(opt)
+				if err != nil {
+					fmt.Printf("无效的HTTP状态码: %s\n", opt)
+					os.Exit(1)
+				}
+				found := false
+				for _, existingCode := range codexCodes {
+					if existingCode == code {
+						codesToDelete = append(codesToDelete, code)
+						found = true
+						break
+					}
+				}
+				if !found {
+					fmt.Printf("HTTP %d 不存在于当前结果中\n", code)
 				}
 			}
 		}
-		fmt.Printf("\n🗑️  已删除 %d 个无效凭证\n", deleted)
-		fmt.Printf("剩余有效凭证: %d 个\n", len(valid))
-		return
-	}
-
-	// 按 HTTP code 删除功能
-	if len(codexCodes) == 0 {
-		fmt.Println("\n所有无效凭证均为不能刷新的，请使用上面的删除选项。")
-		return
-	}
-
-	fmt.Println("\n====================================")
-	fmt.Println("  按 HTTP 状态码删除")
-	fmt.Println("====================================")
-	if len(cannotRefresh) > 0 {
-		fmt.Printf("  refresh: 删除所有不能刷新的凭证 (%d 个)\n", len(cannotRefresh))
-	}
-	for _, code := range codexCodes {
-		fmt.Printf("  %d: 删除 HTTP %d 的凭证 (%d 个)\n", code, code, len(codexFailed[code]))
-	}
-	fmt.Println("  all: 删除所有无效凭证")
-	fmt.Println("  q: 退出不删除")
-	fmt.Print("\n请输入要删除的选项 (多个用逗号分隔, 如 401,403 或 refresh,401): ")
-
-	input2, _ := reader.ReadString('\n')
-	input2 = strings.TrimSpace(strings.ToLower(input2))
-
-	if input2 == "q" || input2 == "" {
-		fmt.Println("\n取消删除")
-		return
-	}
-
-	var toDeleteCannotRefresh bool
-	var codesToDelete []int
-
-	if input2 == "all" {
-		toDeleteCannotRefresh = true
-		codesToDelete = codexCodes
 	} else {
-		opts := strings.Split(input2, ",")
-		for _, opt := range opts {
-			opt = strings.TrimSpace(opt)
-			if opt == "refresh" {
-				toDeleteCannotRefresh = true
-			} else {
-				var code int
-				if _, err := fmt.Sscanf(opt, "%d", &code); err == nil {
-					for _, existingCode := range codexCodes {
-						if existingCode == code {
-							codesToDelete = append(codesToDelete, code)
-							break
+		fmt.Println("\n====================================")
+		fmt.Println("  按 HTTP 状态码删除")
+		fmt.Println("====================================")
+		if len(cannotRefresh) > 0 {
+			fmt.Printf("  refresh: 删除所有不能刷新的凭证 (%d 个)\n", len(cannotRefresh))
+		}
+		for _, code := range codexCodes {
+			fmt.Printf("  %d: 删除 HTTP %d 的凭证 (%d 个)\n", code, code, len(codexFailed[code]))
+		}
+		fmt.Println("  all: 删除所有无效凭证")
+		fmt.Println("  q: 退出不删除")
+		fmt.Print("\n请输入要删除的选项 (多个用逗号分隔, 如 401,403 或 refresh,401): ")
+
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(strings.ToLower(input))
+
+		if input == "q" || input == "" {
+			fmt.Println("\n取消删除")
+			return
+		}
+
+		if input == "all" {
+			toDeleteCannotRefresh = true
+			codesToDelete = codexCodes
+		} else {
+			opts := strings.Split(input, ",")
+			for _, opt := range opts {
+				opt = strings.TrimSpace(opt)
+				if opt == "refresh" {
+					toDeleteCannotRefresh = true
+				} else {
+					var code int
+					if _, err := fmt.Sscanf(opt, "%d", &code); err == nil {
+						for _, existingCode := range codexCodes {
+							if existingCode == code {
+								codesToDelete = append(codesToDelete, code)
+								break
+							}
 						}
 					}
 				}
@@ -317,14 +332,16 @@ func main() {
 		}
 	}
 
-	fmt.Printf("\n将删除 %d 个凭证 (%s)\n确认删除? (y/N): ", totalToDelete, strings.Join(deleteDesc, ", "))
+	fmt.Printf("\n将删除 %d 个凭证 (%s)\n", totalToDelete, strings.Join(deleteDesc, ", "))
 
-	confirm, _ := reader.ReadString('\n')
-	confirm = strings.TrimSpace(strings.ToLower(confirm))
-
-	if confirm != "y" && confirm != "yes" {
-		fmt.Println("\n取消删除")
-		return
+	if !autoYes {
+		fmt.Printf("确认删除? (y/N): ")
+		confirm, _ := reader.ReadString('\n')
+		confirm = strings.TrimSpace(strings.ToLower(confirm))
+		if confirm != "y" && confirm != "yes" {
+			fmt.Println("\n取消删除")
+			return
+		}
 	}
 
 	deleted := 0
