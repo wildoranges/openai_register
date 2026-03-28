@@ -685,8 +685,14 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 		birthdayInput, _ := page.Timeout(1 * time.Second).Element("input[name='birthday']")
 		if birthdayInput != nil {
 			Printf("设置生日 (普通 input): %s\n", birthdate)
-			_ = birthdayInput.Timeout(2 * time.Second).SelectAllText()
-			_ = birthdayInput.Timeout(2 * time.Second).Input(birthdate)
+			_ = page.MustEval(fmt.Sprintf(`() => {
+				const input = document.querySelector('input[name="birthday"]');
+				if (input) {
+					input.value = '%s';
+					input.dispatchEvent(new Event('input', { bubbles: true }));
+					input.dispatchEvent(new Event('change', { bubbles: true }));
+				}
+			}`, birthdate))
 			time.Sleep(500 * time.Millisecond)
 			result := page.MustEval(`() => {
 				const input = document.querySelector('input[name="birthday"]');
@@ -698,8 +704,8 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 		ageInput, _ := page.Timeout(1 * time.Second).Element("input[name='age']")
 		if ageInput != nil {
 			Printf("设置年龄: %d\n", age)
-			ageInput.MustClick()
-			ageInput.MustInput(fmt.Sprintf("%d", age))
+			_ = ageInput.Timeout(3*time.Second).Click(proto.InputMouseButtonLeft, 1)
+			_ = ageInput.Timeout(3 * time.Second).Input(fmt.Sprintf("%d", age))
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
@@ -740,15 +746,26 @@ func (br *BrowserRegisterOAuth) handleAboutYouPageWithMode(page *rod.Page, isLog
 				return ErrLoginFailedAliasUsed
 			}
 		}
+		if strings.Contains(htmlContent, "error occurred") || strings.Contains(htmlContent, "Operation timed out") {
+			Printf("检测到 OpenAI 错误页面\n")
+			os.WriteFile("debug_openai_error.html", []byte(htmlContent), 0644)
+			br.saveDebugScreenshot(page, "openai_error")
+			return fmt.Errorf("OpenAI 服务错误页面")
+		}
 
 		if strings.Contains(currentURL, "add-phone") {
 			Println("检测到 add-phone 页面，尝试跳过...")
+			clicked := false
 			for _, skipText := range []string{"Skip", "Do this later", "Not now", "稍后", "跳过"} {
 				if br.clickElementByText(page, "button", skipText) {
 					Printf("已点击 %s 按钮...\n", skipText)
 					time.Sleep(3 * time.Second)
+					clicked = true
 					break
 				}
+			}
+			if !clicked {
+				Println("未找到跳过按钮，可能页面未正确加载")
 			}
 		} else if strings.Contains(currentURL, "consent") {
 			Println("检测到 consent 页面，点击同意...")
