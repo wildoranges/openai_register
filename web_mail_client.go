@@ -14,14 +14,15 @@ import (
 
 // WebMailClient 使用浏览器访问 chatgpt.org.uk 网页获取临时邮箱
 type WebMailClient struct {
-	browser      *rod.Browser
-	page         *rod.Page
-	currentEmail string
-	proxyURL     string
-	headless     bool
-	usedOTPs     map[string]bool
-	otpMutex     sync.RWMutex
-	localProxy   *LocalProxyForwarder
+	browser        *rod.Browser
+	page           *rod.Page
+	currentEmail   string
+	proxyURL       string
+	headless       bool
+	usedOTPs       map[string]bool
+	otpMutex       sync.RWMutex
+	localProxy     *LocalProxyForwarder
+	localProxyAddr string
 }
 
 // NewWebMailClient 创建 WebMailClient

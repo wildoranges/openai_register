@@ -37,7 +37,7 @@ func TestSaveAndLoadConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 
 	original := &Config{
-		Proxy:      "http://proxy-host:port",
+		Proxy:      "http://127.0.0.1:8080",
 		Proxies:    []string{"http://proxy1:8080", "http://proxy2:8080"},
 		Headless:   false,
 		Timeout:    42,

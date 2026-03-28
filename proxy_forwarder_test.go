@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewLocalProxyForwarderWithAuth(t *testing.T) {
-	f, err := NewLocalProxyForwarder("http://proxy-host:port")
+	f, err := NewLocalProxyForwarder("http://user:pass@127.0.0.1:8080")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

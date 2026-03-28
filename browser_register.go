@@ -25,11 +25,13 @@ var (
 )
 
 type BrowserRegister struct {
-	browser       *rod.Browser
-	httpClient    *HTTPClient
-	webMailClient *WebMailClient
-	config        *Config
-	proxyURL      string
+	browser        *rod.Browser
+	httpClient     *HTTPClient
+	webMailClient  *WebMailClient
+	config         *Config
+	proxyURL       string
+	localProxy     *LocalProxyForwarder
+	localProxyAddr string
 }
 
 type BrowserFingerprintProfile struct {
@@ -81,6 +83,14 @@ func (br *BrowserRegister) effectiveProxyURL() string {
 	return br.proxyURL
 }
 
+func (br *BrowserRegister) StopLocalProxy() {
+	if br.localProxy != nil {
+		br.localProxy.Stop()
+		br.localProxy = nil
+		br.localProxyAddr = ""
+	}
+}
+
 func (br *BrowserRegister) applyLauncherProxy(l *launcher.Launcher) (*launcher.Launcher, *LocalProxyForwarder, error) {
 	effectiveProxy := br.effectiveProxyURL()
 	if effectiveProxy == "" {
@@ -96,6 +106,10 @@ func (br *BrowserRegister) applyLauncherProxy(l *launcher.Launcher) (*launcher.L
 	}
 
 	if proxyURL.User != nil {
+		if br.localProxy != nil && br.localProxyAddr != "" {
+			Printf("复用本地代理转发器: %s\n", br.localProxyAddr)
+			return l.Set("proxy-server", br.localProxyAddr), br.localProxy, nil
+		}
 		Println("代理需要认证，启动本地转发器...")
 		localProxy, err := NewLocalProxyForwarder(effectiveProxy)
 		if err != nil {
@@ -106,6 +120,8 @@ func (br *BrowserRegister) applyLauncherProxy(l *launcher.Launcher) (*launcher.L
 			return nil, nil, fmt.Errorf("启动本地代理失败: %v", err)
 		}
 		Printf("本地代理已启动: %s\n", localAddr)
+		br.localProxy = localProxy
+		br.localProxyAddr = localAddr
 		return l.Set("proxy-server", localAddr), localProxy, nil
 	}
 
@@ -250,9 +266,7 @@ func (br *BrowserRegister) Register(email, password string) (*AccountCredentials
 	if err != nil {
 		return nil, err
 	}
-	if localProxy != nil {
-		defer localProxy.Stop()
-	}
+	_ = localProxy
 
 	u, err := l.Launch()
 	if err != nil {

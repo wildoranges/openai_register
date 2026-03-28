@@ -87,16 +87,16 @@ func (c *HTTPClient) GetTempEmail() (string, error) {
 	var headers map[string]string
 
 	if apiKey != "" {
-		Printf("[chatgpt.org.uk] 使用专属 API Key: %s...\n", apiKey[:min(10, len(apiKey))])
-		apiURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/generate-email?api_key=YOUR_API_KEY", apiKey)
+		Printf("[chatgpt.org.uk] 使用专属 API Key\n")
+		apiURL = "https://mail.chatgpt.org.uk/api/generate-email?api_key=" + url.QueryEscape(apiKey)
 		headers = map[string]string{
 			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
 			"Referer":    "https://mail.chatgpt.org.uk",
 			"X-API-Key":  apiKey,
 		}
 	} else {
-		Println("[chatgpt.org.uk] 使用全球共享配额")
-		apiURL = "https://mail.chatgpt.org.uk/api/generate-email?api_key=YOUR_API_KEY"
+		Println("[chatgpt.org.uk] 未配置 API Key")
+		apiURL = "https://mail.chatgpt.org.uk/api/generate-email"
 		headers = map[string]string{
 			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
 			"Referer":    "https://mail.chatgpt.org.uk",
@@ -171,14 +171,14 @@ func (c *HTTPClient) CheckEmailSkipUsed(email string, usedOTPs map[string]bool) 
 	var headers map[string]string
 
 	if apiKey != "" {
-		checkURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/emails?api_key=YOUR_API_KEY&email=%s", apiKey, url.QueryEscape(email))
+		checkURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/emails?api_key=%s&email=%s", url.QueryEscape(apiKey), url.QueryEscape(email))
 		headers = map[string]string{
 			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
 			"Referer":    "https://mail.chatgpt.org.uk",
 			"X-API-Key":  apiKey,
 		}
 	} else {
-		checkURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/emails?api_key=YOUR_API_KEY&email=%s", url.QueryEscape(email))
+		checkURL = fmt.Sprintf("https://mail.chatgpt.org.uk/api/emails?email=%s", url.QueryEscape(email))
 		headers = map[string]string{
 			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
 			"Referer":    "https://mail.chatgpt.org.uk",

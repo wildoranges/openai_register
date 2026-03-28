@@ -93,9 +93,7 @@ func (br *BrowserRegisterOAuth) RegisterWithOAuth(email, password, otp string) (
 	if err != nil {
 		return nil, err
 	}
-	if localProxy != nil {
-		defer localProxy.Stop()
-	}
+	_ = localProxy
 
 	u, err := l.Launch()
 	if err != nil {
@@ -249,9 +247,7 @@ func (br *BrowserRegisterOAuth) LoginWithOAuth(email, password, otp string) (*Ac
 	if err != nil {
 		return nil, err
 	}
-	if localProxy != nil {
-		defer localProxy.Stop()
-	}
+	_ = localProxy
 
 	uri, err := l.Launch()
 	if err != nil {
